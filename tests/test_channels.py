@@ -379,27 +379,8 @@ check("…and points at cockpit.statusline",
       "cockpit.statusline" in d["statusLine"]["command"])
 check("clearing edges are wired", "PostToolUse" in d["hooks"]
       and "PermissionDenied" in d["hooks"])
-
-
-def _urls(cfg, event):
-    """Every cockpit endpoint wired to `event`."""
-    return [h["url"] for m in cfg["hooks"].get(event, []) for h in m["hooks"]]
-
-
-# PreToolUse is now a real clearing edge, so its mere presence no longer says
-# anything about the capture hook — the endpoint does.
-check("PreToolUse clears, so a denial cannot leave a stale flag",
-      any(u.endswith("/hook/active") for u in _urls(d, "PreToolUse")),
-      str(_urls(d, "PreToolUse")))
-check("…unmatched, because a denial is usually followed by a non-prompting tool",
-      any(m.get("matcher") in (None, "") or "matcher" not in m
-          for m in d["hooks"]["PreToolUse"]),
-      str([m.get("matcher") for m in d["hooks"]["PreToolUse"]]))
-check("capture hook is OFF by default",
-      not any(u.endswith("/hook/capture") for u in _urls(d, "PreToolUse")))
-check("…and available on request",
-      any(u.endswith("/hook/capture")
-          for u in _urls(cc.desired(capture=True), "PreToolUse")))
+check("capture hook is OFF by default", "PreToolUse" not in d["hooks"])
+check("…and available on request", "PreToolUse" in cc.desired(capture=True)["hooks"])
 
 # Paths must follow the checkout, which is the whole point.
 other = cc.desired(python="/opt/py/bin/python", repo="/elsewhere/streamdeck")

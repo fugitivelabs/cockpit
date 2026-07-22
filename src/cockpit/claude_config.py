@@ -43,31 +43,14 @@ REFRESH_INTERVAL_S = 30
 
 # (event, matcher, endpoint). Matcher None means the event takes none.
 #
-# The clearing edges are what make a `blocked` flag mean "a prompt is on screen
-# right now" rather than "one was, up to 30 minutes ago" — they fire the instant
-# a prompt is answered, where `Stop` only fires at the end of the whole turn.
+# The two clearing edges on PostToolUse/PermissionDenied are what make a
+# `blocked` flag mean "a prompt is on screen right now" rather than "one was,
+# up to 30 minutes ago" — they fire the instant a prompt is answered, where
+# `Stop` only fires at the end of the whole turn.
 #
-# **PermissionDenied does not cover a user pressing "No".** Verified 2026-07-22
-# against the hooks reference: it fires only when the *auto-mode classifier*
-# denies a tool call, and it is TypeScript-SDK-only besides. In 168 live
-# `/hook/blocked` events it had never once fired. There is no documented event
-# for an interactive denial at all, which left the deck with no clearing edge on
-# that path: the tool never runs so PostToolUse cannot fire either, and the tile
-# stayed red for FLAG_TTL_S — thirty minutes — while the session worked happily
-# on. It is kept below because it is correct for the auto-mode case, but nothing
-# may depend on it.
-#
-# **PreToolUse is the edge that actually closes that gap.** A session cannot
-# start a tool call while it is blocked on a prompt, so any PreToolUse is proof
-# the previous prompt resolved, however it resolved. The ordering is documented
-# and is the safe direction: PreToolUse fires BEFORE PermissionRequest for the
-# same call, so a gated tool clears then re-blocks, never the reverse.
-#
-# It is deliberately UNMATCHED, unlike PostToolUse. Scoping it to prompting
-# tools would miss the common shape of a denial — Claude answers "No" by reading
-# or grepping something else first — and a clearing edge that misses is the bug
-# this exists to fix. The cost is one localhost POST per tool call; set_flag
-# only logs on an actual change, so idempotent clears are silent.
+# PostToolUse is deliberately scoped rather than unmatched: unmatched, it fires
+# for every Read and Grep in every session, which is a lot of traffic to clear a
+# flag that only prompting tools can set.
 PROMPTING_TOOLS = "Bash|Write|Edit|NotebookEdit|WebFetch|WebSearch"
 
 WIRING = (
@@ -80,10 +63,8 @@ WIRING = (
     # Fires ONLY for tool approvals -> the stronger claim, wins by precedence.
     ("PermissionRequest", None, "/hook/blocked"),
     # Clearing edges.
-    ("PreToolUse", None, "/hook/active"),
     ("PostToolUse", PROMPTING_TOOLS, "/hook/active"),
     ("PostToolUse", "mcp__.*", "/hook/active"),
-    # Auto-mode classifier denials only — never an interactive "No". See above.
     ("PermissionDenied", None, "/hook/active"),
     ("Stop", None, "/hook/stop"),
     ("UserPromptSubmit", None, "/hook/active"),
