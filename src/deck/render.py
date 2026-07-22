@@ -168,6 +168,12 @@ ERROR_SLOT = error_slot()
 # stray quote mark rather than "there is more text here".
 ELLIPSIS = "..."
 
+# Starting point for the label under a centred icon, and the basis for the space
+# reserved beneath it. Both keys of a bar reserve the same height from this
+# whether or not their own label needed it, which is what keeps their icons on
+# one line across the row.
+ICON_TEXT_SIZE = 15
+
 
 # Icons are DRAWN, never set as text. The condensed faces this renderer uses
 # have no ✓ or ✗ — asking for one yields a .notdef box, and a tofu square on a
@@ -235,7 +241,17 @@ def draw_icon(img: Image.Image, name: str, cx: float, cy: float,
         return
 
     flat = mask.resize((box + pad * 2, box + pad * 2), Image.LANCZOS)
-    img.paste(color, (int(cx - (box / 2 + pad)), int(cy - (box / 2 + pad))), flat)
+    # Centre on the INK, not on the nominal path box. A checkmark is not
+    # symmetric about the box it is drawn in — its mass sits low and right — so
+    # centring the box leaves the glyph visibly off, while a cross (which IS
+    # symmetric) looks fine. Measuring the rendered mask handles every shape
+    # without per-icon fudge factors.
+    ink = flat.getbbox()
+    if ink is None:
+        return
+    ox = cx - (ink[0] + ink[2]) / 2.0
+    oy = cy - (ink[1] + ink[3]) / 2.0
+    img.paste(color, (int(round(ox)), int(round(oy))), flat)
 
 
 def ellipsize(d: ImageDraw.ImageDraw, text: str, f, max_w: float,
@@ -376,8 +392,11 @@ def render(deck, slot: Slot) -> Image.Image:
     inset = slot.frame_w if slot.frame else 0
     pad = left + inset + (8 if left else 7)
     avail = w - pad - 6 - inset
-    if slot.badge:
-        avail -= 15                    # reserve the top-right corner
+    if slot.badge and not (slot.align == "center" and slot.icon):
+        # Only where text shares a line with the corner. With an icon the body
+        # text sits below the badge, so stealing width from it just makes the
+        # label smaller for nothing.
+        avail -= 15
     sub_fg = slot.sub_fg or "#7A828C"
 
     if slot.align == "center":
@@ -387,17 +406,36 @@ def render(deck, slot: Slot) -> Image.Image:
             # at a glance; the text carries the detail that distinguishes it
             # from its neighbours, and gets two lines because at 96 px one line
             # of anything specific is a truncated stub.
-            draw_icon(img, slot.icon, cx, top + 26, 30,
-                      slot.icon_color or slot.fg)
+            #
+            # Laid out bottom-up: the text block is measured first and anchored
+            # to the bottom, then the icon is centred in whatever space is left
+            # above it. Pinning the icon to a fixed y instead would drift off
+            # centre the moment the label wrapped to a second line.
             body = slot.label.upper() if slot.caps else slot.label
             track = 0.7 if slot.caps else 0.0
             lines, f = wrap(d, body, "caption" if slot.caps else "value",
-                            avail, 2, 13, 9, track)
-            y = 52
+                            w - 2 * inset - 12, 2, ICON_TEXT_SIZE, 10, track)
+            # Two lines of space are reserved whether or not both are used, so
+            # the icon sits at the SAME height on every key in the bar. Sizing
+            # the reservation to the actual line count instead centres each icon
+            # correctly in isolation and leaves the row visibly ragged — a
+            # one-word key's icon drops while its two-line neighbour's rides up.
+            # The text is then centred within its reservation.
+            # The reservation is two lines at the LARGEST size the label could
+            # have taken, not at the size it actually got. Using the fitted size
+            # reintroduces the ragged row it was meant to fix: a label that had
+            # to shrink to fit yields a shorter block, which lifts its icon
+            # relative to a neighbour whose label fitted at full size.
+            reserve_h = (ICON_TEXT_SIZE + 3) * 2
+            line_h = f.size + 3
+            block_top = h - inset - 8 - reserve_h
+            draw_icon(img, slot.icon, cx, (top + inset + block_top) / 2.0, 30,
+                      slot.icon_color or slot.fg)
+            y = block_top + (reserve_h - line_h * len(lines)) / 2.0
             for line in lines:
                 lw = _tracked_w(d, line, f, track)
                 _draw_tracked(d, (cx - lw / 2, y), line, f, slot.fg, track)
-                y += f.size + 2
+                y += line_h
         else:
             # Value large and centred, caption beneath it: the action-bar shape.
             if slot.label:
@@ -435,8 +473,8 @@ def render(deck, slot: Slot) -> Image.Image:
             d.text((pad, h // 2), text, anchor="lm", fill=slot.fg, font=f)
 
     if slot.badge:
-        d.text((w - 6 - inset, top + inset + 2), slot.badge, anchor="ra",
-               fill=slot.fg, font=font(21, "display"))
+        d.text((w - 6 - inset, top + inset + 3), slot.badge, anchor="ra",
+               fill=slot.fg, font=font(16, "display"))
 
     if slot.bar is not None:
         # A band on the bottom edge, full width. Deliberately not inset: it is a

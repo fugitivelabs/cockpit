@@ -253,6 +253,31 @@ for _icon in ("check", "check-double", "cross"):
     check(f"icon '{_icon}' is antialiased, not stair-stepped",
           len(_mid) > 8, f"{len(_mid)} intermediate levels")
 
+# Centring is measured on the rendered INK, because that is what the eye
+# centres on: a checkmark's mass sits low and right of the box it is drawn in,
+# so a nominally-centred glyph still looks off. And the icon must sit at the
+# same height on every key, or a bar of one- and two-line labels reads ragged.
+def _ink_centre(slot):
+    px = render(DECK, slot).convert("L").load()
+    pts = [(x, y) for x in range(96) for y in range(96) if px[x, y] > 120]
+    xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+    return (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
+
+
+for _icon in ("check", "check-double", "cross", "plus", "dot"):
+    _cx, _ = _ink_centre(Slot(icon=_icon, bg="#000000", icon_color="#FFFFFF",
+                              align="center"))
+    check(f"icon '{_icon}' is centred on its ink, not its path box",
+          abs(_cx - 48) <= 1.0, f"centre x={_cx}")
+
+_short = Slot(icon="check", label="YES", caps=True, align="center",
+              bg="#000000", icon_color="#FFFFFF", fg="#000001")
+_long = Slot(icon="check", label="DO NOT ASK AGAIN FOR EXAMPLE", caps=True,
+             align="center", bg="#000000", icon_color="#FFFFFF", fg="#000001")
+check("a one-line and a two-line key put their icon at the same height",
+      _ink_centre(_short)[1] == _ink_centre(_long)[1],
+      f"{_ink_centre(_short)[1]} vs {_ink_centre(_long)[1]}")
+
 check("a long label is truncated with an ASCII marker, not U+2026",
       "…" not in ELLIPSIS and ELLIPSIS == "...")
 
