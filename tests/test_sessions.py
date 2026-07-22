@@ -243,6 +243,65 @@ check("a collision with no task text still names the project",
       collide_no_task["claude:1"] == ("Projects", ""),
       str(collide_no_task["claude:1"]))
 
+print("\n[screen-truth clearing] the edge a denial never fires")
+# Answering "No" runs no tool, so no PostToolUse; PermissionDenied is auto-mode
+# only. Without a screen check the tile stays red for FLAG_TTL_S (30 minutes)
+# while the session works on. The probe is THREE-valued and None must be inert:
+# an unreadable screen is not evidence that a prompt was answered.
+
+
+class ProbeAdapter:
+    name = "probe"
+
+    def __init__(self, present):
+        self.present = present
+        self.calls = 0
+        self._s = [mk("claude:9", "peregrine", "t", "blocked", handle="90")]
+
+    def sessions(self):
+        return list(self._s)
+
+    def focused(self, sessions):
+        return "90"
+
+    def focus(self, session):
+        return True
+
+    def prompt_ui_present(self, session):
+        self.calls += 1
+        return self.present
+
+
+for present, should_clear, why in (
+        (False, True, "screen read, no prompt -> clear the stale flag"),
+        (True, False, "a prompt IS on screen -> leave it alone"),
+        (None, False, "screen unreadable -> change nothing"),
+):
+    cleared = []
+    ad = ProbeAdapter(present)
+    pl = SessionPoller(ad, interval=99, prompt_reader=lambda s: None,
+                       on_prompt_gone=lambda s: cleared.append(s.id))
+    pl.poll_once()
+    check(f"probe={present!r}: {why}", bool(cleared) is should_clear,
+          f"cleared={cleared}")
+
+# A raise that the probe cannot see must not be silently swallowed.
+boom = ProbeAdapter(False)
+boom.prompt_ui_present = lambda s: 1 / 0
+cleared = []
+pb = SessionPoller(boom, interval=99, prompt_reader=lambda s: None,
+                   on_prompt_gone=lambda s: cleared.append(s.id))
+pb.poll_once()
+check("a probe that raises clears nothing and does not kill the poll",
+      cleared == [] and len(pb.snapshot()) == 1)
+
+# Without the callback wired the probe must not run at all.
+quiet = ProbeAdapter(False)
+pq = SessionPoller(quiet, interval=99, prompt_reader=lambda s: None)
+pq.poll_once()
+check("no on_prompt_gone wired -> the probe is never consulted",
+      quiet.calls == 0, str(quiet.calls))
+
 print("\n[summarize]")
 
 c = summarize(found)

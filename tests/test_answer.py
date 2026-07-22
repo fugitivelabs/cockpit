@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.join(
 from cockpit import actions as actions_mod
 from cockpit import palette
 from cockpit.actions import ACTION_BG, answer_keys
-from cockpit.axread import Prompt, parse_prompt
+from cockpit.axread import Prompt, parse_prompt, prompt_ui_present
 from cockpit.sessions import Session
 
 ok = 0
@@ -249,6 +249,27 @@ _a = Prompt(options=((1, "Yes"), (2, "No")), subject="Fetch one")
 _b = Prompt(options=((1, "Yes"), (2, "No")), subject="Fetch two")
 check("two prompts differing ONLY in subject have identical options",
       _a.options == _b.options)
+
+print("\n[prompt_ui_present] the clearing edge a denial never fires")
+# Answering "No" runs no tool, so PostToolUse cannot fire; PermissionDenied is
+# auto-mode-only. The screen is the only evidence that the prompt is gone.
+check("a live menu is prompt UI", prompt_ui_present(BASH) is True)
+check("…so is a three-option one", prompt_ui_present(FETCH) is True)
+check("a plain scrollback is NOT",
+      prompt_ui_present("⏺ done\n\nsome output\n$ ") is False)
+check("empty text is NOT", prompt_ui_present("") is False)
+
+# The distinction that keeps this from clearing a session still holding you:
+# the free-text follow-up has no ANSWERABLE menu, but is very much a prompt.
+check("the free-text follow-up yields no answer keys",
+      parse_prompt(FOLLOWUP) is None)
+# Documented limit rather than a bug: the follow-up renders no footer, so it
+# reads as "no prompt" and the flag clears. Bounded because the probe only runs
+# on the FOCUSED session — the window already in front of you — and submitting
+# fires UserPromptSubmit. Pinned so the tradeoff is a decision, not a surprise.
+check("the free-text follow-up reads as no-prompt (accepted limit)",
+      prompt_ui_present(FOLLOWUP) is False,
+      "see axread.prompt_ui_present — bounded to the focused window")
 
 check("no menu on screen -> no answer keys at all",
       answer_keys(FakeDash(None)) is None)

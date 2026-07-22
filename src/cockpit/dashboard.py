@@ -26,6 +26,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from dataclasses import replace
 from typing import Optional
 
 from deck import BLANK, Component, Slot, Static, View
@@ -309,13 +310,18 @@ class SessionPoller:
 
     def __init__(self, adapter: Adapter, interval: float = POLL_EVERY_S,
                  tracker: Optional[AttentionTracker] = None,
-                 prompt_reader=None):
+                 prompt_reader=None, on_prompt_gone=None):
         self._adapter = adapter
         self._interval = interval
         # Reads the on-screen menu for a session. Injected so it can be faked in
         # tests, and so the AX dependency stays optional — without it the board
         # simply never offers answer keys.
         self._prompt_reader = prompt_reader
+        # Called with a Session whose screen demonstrably has no prompt on it
+        # while its flag still says otherwise. The clearing edge of last resort:
+        # a denial fires no hook at all (the tool never runs), so without this
+        # the tile stays red until FLAG_TTL_S — thirty minutes.
+        self._on_prompt_gone = on_prompt_gone
         self.tracker = tracker or AttentionTracker()
         self._lock = threading.Lock()
         self._sessions: list[Session] = []
@@ -384,7 +390,16 @@ class SessionPoller:
             if focused is not None and self._prompt_reader is not None:
                 target = next((x for x in found if x.handle == focused), None)
                 if target is not None and target.state in ("blocked", "waiting"):
-                    prompt = self._prompt_reader(target)
+                    # Ground truth beats a stale edge (design.md). A denial
+                    # fires no hook — the tool never runs — so the screen is the
+                    # only thing that can say the prompt is gone. Checked before
+                    # reading the menu: if there is no prompt UI there is no
+                    # menu to read either.
+                    if self._screen_says_clear(target):
+                        found = [replace(x, state="idle") if x is target else x
+                                 for x in found]
+                    else:
+                        prompt = self._prompt_reader(target)
         except Exception:
             # An adapter is third-party-ish code from this thread's point of
             # view; one bad poll must not kill the poller for the day.
@@ -396,6 +411,32 @@ class SessionPoller:
             self._prompt = prompt
             self._updated_at = time.monotonic()
         self._last_poll = time.monotonic()
+
+    def _screen_says_clear(self, target: Session) -> bool:
+        """True only if the screen PROVES nothing is being asked of `target`.
+
+        Three-valued on purpose. The probe returns None when Accessibility is
+        unavailable or the window moved under us, and None must change nothing —
+        an unreadable screen is not evidence of an answered prompt. Only an
+        explicit False (screen read, no prompt footer found) clears.
+        """
+        probe = getattr(self._adapter, "prompt_ui_present", None)
+        if not callable(probe) or self._on_prompt_gone is None:
+            return False
+        try:
+            present = probe(target)
+        except Exception:
+            log.exception("prompt-UI probe failed for %s", target.id)
+            return False
+        if present is not False:
+            return False
+        log.info("session %s: no prompt on screen, clearing stale flag", target.id)
+        try:
+            self._on_prompt_gone(target)
+        except Exception:
+            log.exception("on_prompt_gone failed for %s", target.id)
+            return False
+        return True
 
     def snapshot(self) -> list[Session]:
         with self._lock:
@@ -423,10 +464,11 @@ class Dashboard:
 
     def __init__(self, adapter: Adapter, key_count: int = 8,
                  interval: float = POLL_EVERY_S, session_keys=SESSION_KEYS,
-                 prompt_reader=None):
+                 prompt_reader=None, on_prompt_gone=None):
         self._adapter = adapter
         self._prompt_reader = prompt_reader
-        self.poller = SessionPoller(adapter, interval, prompt_reader=prompt_reader)
+        self.poller = SessionPoller(adapter, interval, prompt_reader=prompt_reader,
+                                    on_prompt_gone=on_prompt_gone)
         self.view = CockpitView(session_keys, key_count=key_count)
         self._signature: Optional[tuple] = None
         self._sessions: list[Session] = []

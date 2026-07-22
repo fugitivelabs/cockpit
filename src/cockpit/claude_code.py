@@ -239,6 +239,25 @@ class ClaudeCodeAdapter:
             ))
         return out
 
+    def prompt_ui_present(self, session: Session) -> Optional[bool]:
+        """Is a prompt UI on that session's screen? None if unreadable.
+
+        Same window-identity proof as `read_prompt` — a read must never return
+        another session's screen — but a weaker question, so it can answer for
+        screens `read_prompt` refuses to parse. None means "could not tell",
+        which callers must treat as "change nothing".
+        """
+        from .axread import prompt_ui_present as _present, visible_text
+        front = frontmost()
+        if front is None or front.bundle_id != TERMINAL_BUNDLE:
+            return None
+        if self.front_window_now() != session.handle:
+            return None
+        text = visible_text(front.pid)
+        if text is None:
+            return None
+        return _present(text)
+
     def read_prompt(self, session: Session):
         """The menu on screen in that session's window, or None.
 

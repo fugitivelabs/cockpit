@@ -111,6 +111,41 @@ _FOOTER = re.compile(r"Esc to (cancel|interrupt)", re.I)
 _TEXT_INPUT = re.compile(r"ctrl\+g to edit|edit in Vim", re.I)
 
 
+def prompt_ui_present(text: str) -> bool:
+    """Is ANY prompt UI on screen — not necessarily an answerable menu?
+
+    Deliberately weaker than `parse_prompt`, and the difference is the whole
+    point. `parse_prompt` returns None for several screens that are still very
+    much holding you: a live text field ("tell Claude what to do differently"),
+    a menu with more options than we will render, a shape we refuse to parse.
+    Treating "no answerable menu" as "no prompt" would clear a flag on a session
+    that is still waiting for you to type.
+
+    This asks only whether Claude Code's prompt footer is on screen. Its
+    ABSENCE is evidence that nothing is being asked — the missing clearing edge
+    for a denial, where no hook fires at all.
+
+    **Known limit, accepted deliberately.** The free-text follow-up ("tell
+    Claude what to do differently") renders no footer either, so this reads it
+    as "no prompt" and its flag clears — a session that is still waiting for you
+    to type goes quiet on the board. Two things bound that:
+
+      - the probe only ever runs against the FOCUSED session, so the window it
+        can mislead you about is the one already in front of you; and
+      - submitting the text fires UserPromptSubmit, which puts the session back
+        to working immediately.
+
+    The cost is a half-typed box you walked away from showing idle instead of
+    waiting. The alternative was pattern-matching the follow-up's box-drawing,
+    which is brittle against a UI that has already changed once — and a fragile
+    detector here fails toward a permanent false red, which is strictly worse
+    than this. Revisit if it ever bites.
+    """
+    if not text:
+        return False
+    return any(_FOOTER.search(l) for l in text.splitlines()[-TAIL_LINES:])
+
+
 def parse_prompt(text: str) -> Optional[Prompt]:
     """Find the live menu in a terminal's visible text, or None.
 
