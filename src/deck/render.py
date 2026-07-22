@@ -429,7 +429,7 @@ def render(deck, slot: Slot) -> Image.Image:
             reserve_h = (ICON_TEXT_SIZE + 3) * 2
             line_h = f.size + 3
             block_top = h - inset - 8 - reserve_h
-            draw_icon(img, slot.icon, cx, (top + inset + block_top) / 2.0, 30,
+            draw_icon(img, slot.icon, cx, (top + inset + block_top) / 2.0, 36,
                       slot.icon_color or slot.fg)
             y = block_top + (reserve_h - line_h * len(lines)) / 2.0
             for line in lines:
@@ -474,7 +474,7 @@ def render(deck, slot: Slot) -> Image.Image:
 
     if slot.badge:
         d.text((w - 6 - inset, top + inset + 3), slot.badge, anchor="ra",
-               fill=slot.fg, font=font(16, "display"))
+               fill=slot.fg, font=font(14, "display"))
 
     if slot.bar is not None:
         # A band on the bottom edge, full width. Deliberately not inset: it is a

@@ -177,7 +177,7 @@ ANSWER_CANCEL = INERT        # Escape
 ANSWER_BG = FURNITURE
 ANSWER_INK = INK
 ANSWER_INK_DIM = INK_DIM
-ANSWER_FRAME_W = 5
+ANSWER_FRAME_W = 7
 
 # The one place two flooded keys can wear the same hue at once: a `waiting`
 # session tile and a permission-widening answer key are both amber. That is
