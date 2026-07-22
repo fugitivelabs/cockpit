@@ -100,6 +100,53 @@ check("a live record joins", "/dev/ttys099" in r.by_tty())
 clock[0] += 200.0
 check("a record gone quiet stops joining", "/dev/ttys099" not in r.by_tty())
 clock[0] -= 200.0
+r.set_flag("sess-z", None)
+
+# The bug this rule exists for: a session blocked at a permission prompt emits
+# NOTHING — the statusline pauses while the prompt is up and hooks are what
+# being blocked means the absence of. Expiring the join on silence dropped
+# exactly the sessions worth showing, two minutes into a prompt still on screen.
+#
+# Note the TTL here is the real one's shape — comfortably longer than the stale
+# window — because that ordering IS the rule: the flag TTL is what governs how
+# long a blocked session may sit, and it only gets to govern if it outlasts the
+# silence timer it overrides.
+q = Registry(clock=lambda: clock[0], ttl=600.0)
+q.note_statusline("sess-q", tty="/dev/ttys098")
+q.set_flag("sess-q", BLOCKED)
+clock[0] += 200.0
+check("a blocked record survives going quiet — the prompt is still up",
+      q.by_tty()["/dev/ttys098"].flag == BLOCKED)
+clock[0] += 500.0
+check("…but the flag TTL still bounds it, so a ghost cannot live forever",
+      "/dev/ttys098" not in q.by_tty())
+clock[0] -= 700.0
+
+# Quit claude and start it again in the same window: same tty, new session, and
+# the dead record can now outlive its session — so the tty collision this fix
+# makes reachable must resolve to the live one, not the ghost.
+recycled = Registry(clock=lambda: clock[0], ttl=600.0)
+recycled.note_statusline("old-session", tty="/dev/ttys007")
+recycled.set_flag("old-session", BLOCKED)
+clock[0] += 1.0
+recycled.note_statusline("new-session", tty="/dev/ttys007")
+check("a recycled tty resolves to the newer session",
+      recycled.by_tty()["/dev/ttys007"].session_id == "new-session")
+check("…so the dead session's flag cannot paint the new one",
+      recycled.by_tty()["/dev/ttys007"].flag is None)
+
+# Same again with the records inserted the other way round. The old behaviour
+# was last-write-wins by dict insertion order — right, but by accident, and only
+# while a record could not outlive its session.
+reverse = Registry(clock=lambda: clock[0], ttl=600.0)
+clock[0] += 1.0
+reverse.note_statusline("newer", tty="/dev/ttys007")
+clock[0] -= 1.0
+reverse.note_statusline("older", tty="/dev/ttys007")
+reverse.set_flag("older", BLOCKED)
+check("…and insertion order does not decide it",
+      reverse.by_tty()["/dev/ttys007"].session_id == "newer")
+clock[0] += 1.0
 
 r.set_flag("sess-b", BLOCKED)
 check("a hook before any statusline is kept", len(r) == 3)

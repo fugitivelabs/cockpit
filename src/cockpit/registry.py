@@ -19,6 +19,14 @@ So the chain is:
 which means the statusline is not an optional telemetry nicety — without it,
 hook events cannot be attached to a tile at all.
 
+**But the statusline is not a heartbeat, and treating it as one was a bug.** It
+runs on assistant messages and `refreshInterval` — and it stops entirely while a
+permission prompt is on screen. A blocked session therefore emits nothing at
+all: no statusline (paused) and no hooks (that is what blocked *means*). Any
+rule that expires a join on silence will expire exactly the sessions worth
+showing. So silence only ages out a record that holds no flag; a flagged one is
+governed by `FLAG_TTL_S`, the timer written for that question. See `by_tty`.
+
 **Fusion rule: hooks for edges, polling for truth** (design.md). A hook is a
 precise statement about a moment; a title poll is a fact about now. When they
 disagree, now wins:
@@ -50,8 +58,20 @@ log = logging.getLogger("deck.cockpit.registry")
 FLAG_TTL_S = 1800.0
 
 # How long a record may go without a statusline report before it stops being
-# joinable. Comfortably more than the 30s refreshInterval, so a busy machine
-# never drops a live session, but short enough that a recycled tty is clean.
+# joinable *on its own evidence*. Comfortably more than the 30s refreshInterval,
+# so a busy machine never drops a live session.
+#
+# This is the weaker of the two liveness signals and it used to be the only one,
+# which produced the bug this rule now exists alongside: **the statusline stops
+# refreshing while a permission prompt is on screen.** Measured 2026-07-22 —
+# over two minutes every live session's statusline ran (12-30 invocations each)
+# except the one sitting at an approval prompt, which ran zero times. Since a
+# blocked session also fires no further hooks (that is what blocked means), its
+# record went quiet for exactly as long as it was worth showing, aged out at
+# 120s, and the red tile went dark while the prompt was still up.
+#
+# So a timer alone cannot answer "is this record still this tty's session". The
+# caller can: it enumerates live ttys every poll. See `by_tty`.
 STALE_JOIN_S = 120.0
 
 # Notification matchers -> the state they imply. Sourced from Claude Code's
@@ -160,6 +180,27 @@ class Registry:
     def by_tty(self) -> dict[str, SessionRecord]:
         """Records that have a tty, keyed by it — the join table.
 
+        **Silence expires a record only if it holds no flag.** Going quiet is
+        weak evidence of death and no evidence at all for the one state worth
+        showing: a blocked session emits nothing by construction (see
+        STALE_JOIN_S). A flagged record is bounded by `FLAG_TTL_S` instead,
+        which is the timer actually written for "how long may a prompt sit".
+
+        **ttys are recycled**, and letting a record outlive its session is what
+        makes that reachable here. A dead session's flag must never land on
+        whatever new window macOS next hands /dev/ttysNNN to. Note that a live
+        tty proves nothing about *whose* it is — quit `claude` and start it
+        again in the same window and the old record still names a real
+        terminal — so the guard is the record itself: when two claim one tty,
+        the more recently updated wins. Explicitly, below. That used to fall
+        out of dict insertion order, which was right by accident and only while
+        records could not outlive their sessions.
+
+        The residual hazard is a dead flagged record whose tty is reused before
+        the new session's first statusline report. It is bounded by
+        `FLAG_TTL_S`, and mostly masked: a starting session shows a spinner,
+        and `fuse_state` gives a spinning title precedence over any flag.
+
         Expired flags are dropped here rather than mutated in place, so a
         reader never depends on a writer having run recently.
         """
@@ -169,19 +210,20 @@ class Registry:
             for rec in self._by_id.values():
                 if not rec.tty:
                     continue
-                # **ttys are recycled.** A closed session's record would
-                # otherwise sit here forever and silently attach its stale flag
-                # to whatever new window macOS next hands /dev/ttysNNN to —
-                # exactly the wrong-session failure this project exists to
-                # avoid. A live session re-reports every `refreshInterval`
-                # (30s), so anything this quiet is gone.
-                if (now - rec.updated_at) > STALE_JOIN_S:
-                    continue
                 copy = SessionRecord(**vars(rec))
-                if copy.flag and (now - copy.flag_at) > self._ttl:
+                flag_age = now - copy.flag_at
+                if copy.flag and flag_age > self._ttl:
                     log.info("session %s flag %s expired after %.0fs",
-                             copy.session_id, copy.flag, now - copy.flag_at)
+                             copy.session_id, copy.flag, flag_age)
                     copy.flag = None
+                # Fresh by its own report, or held open by a live flag — the
+                # expired-flag branch above having already reduced a lapsed one
+                # to None, so this reads the flag as it will be served.
+                if (now - copy.updated_at) > STALE_JOIN_S and copy.flag is None:
+                    continue
+                prior = out.get(copy.tty)
+                if prior is not None and prior.updated_at >= copy.updated_at:
+                    continue
                 out[copy.tty] = copy
         return out
 
