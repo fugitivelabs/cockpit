@@ -119,6 +119,8 @@ class Slot:
     foot_h: int = 6
     frame: Optional[str] = None        # full perimeter — a distinct key *class*
     frame_w: int = 3
+    icon: str = ""                     # a drawn glyph; see ICONS
+    icon_color: Optional[str] = None   # defaults to fg
     caps: bool = False                 # draw `sub` as tracked small caps
     align: str = "left"                # "left" (two lines) | "center" (value+label)
     sub_fg: Optional[str] = None       # defaults to a dimmed fg
@@ -165,6 +167,114 @@ ERROR_SLOT = error_slot()
 # condensed faces draw their ellipsis as raised dots, which at 11 px reads as a
 # stray quote mark rather than "there is more text here".
 ELLIPSIS = "..."
+
+
+# Icons are DRAWN, never set as text. The condensed faces this renderer uses
+# have no ✓ or ✗ — asking for one yields a .notdef box, and a tofu square on a
+# key that answers a permission prompt is worse than no icon at all. Vectors
+# also stay crisp at any size and need no font to be installed.
+#
+# Shapes only. What a check *means* is the consumer's business.
+ICONS = ("check", "check-double", "cross", "plus", "dot", "bar")
+
+
+def draw_icon(d: ImageDraw.ImageDraw, name: str, cx: float, cy: float,
+              size: float, color: str) -> None:
+    """Draw a named shape centred on (cx, cy), fitting a `size` box."""
+    s = size / 2.0
+    w = max(3, int(size * 0.17))
+
+    def check(ox: float = 0.0) -> None:
+        d.line([(cx + (-0.52 + ox) * s, cy + 0.05 * s),
+                (cx + (-0.12 + ox) * s, cy + 0.55 * s),
+                (cx + (0.62 + ox) * s, cy - 0.55 * s)],
+               fill=color, width=w, joint="curve")
+
+    if name == "check":
+        check()
+    elif name == "check-double":
+        # Two ticks: the second says "and again, and again" — the shape for an
+        # approval that also widens permission.
+        check(-0.55)
+        check(0.45)
+    elif name == "cross":
+        d.line([(cx - 0.5 * s, cy - 0.5 * s), (cx + 0.5 * s, cy + 0.5 * s)],
+               fill=color, width=w)
+        d.line([(cx - 0.5 * s, cy + 0.5 * s), (cx + 0.5 * s, cy - 0.5 * s)],
+               fill=color, width=w)
+    elif name == "plus":
+        d.line([(cx - 0.5 * s, cy), (cx + 0.5 * s, cy)], fill=color, width=w)
+        d.line([(cx, cy - 0.5 * s), (cx, cy + 0.5 * s)], fill=color, width=w)
+    elif name == "dot":
+        d.ellipse([cx - s * 0.4, cy - s * 0.4, cx + s * 0.4, cy + s * 0.4],
+                  fill=color)
+    elif name == "bar":
+        d.rectangle([cx - s * 0.5, cy - w / 2, cx + s * 0.5, cy + w / 2],
+                    fill=color)
+
+
+def ellipsize(d: ImageDraw.ImageDraw, text: str, f, max_w: float,
+              track: float = 0.0) -> str:
+    """Clamp one line to `max_w`, appending the marker if it had to cut.
+
+    Needed even after wrap(): word wrapping cannot break a single token, so a
+    long path or URL is one "word" that sails past the right edge. Every line
+    that reaches a draw call goes through here.
+    """
+    if _tracked_w(d, text, f, track) <= max_w:
+        return text
+    cut = text
+    while cut and _tracked_w(d, cut + ELLIPSIS, f, track) > max_w:
+        cut = cut[:-1]
+    return (cut + ELLIPSIS) if cut else ""
+
+
+def wrap(d: ImageDraw.ImageDraw, text: str, role: str, max_w: float,
+         max_lines: int, start: int, floor: int, track: float = 0.0):
+    """Break `text` onto at most `max_lines`, shrinking until it fits.
+
+    Returns (lines, font). The last line is ellipsized if even `floor` cannot
+    hold the remainder — truncation is still possible, it is just the last
+    resort rather than the first thing that happens at 25 characters.
+    """
+    words = text.split()
+    if not words:
+        return [], font(start, role)
+    for size in range(start, floor - 1, -1):
+        f = font(size, role)
+        lines, cur = [], ""
+        for word in words:
+            trial = f"{cur} {word}".strip()
+            if cur and _tracked_w(d, trial, f, track) > max_w:
+                lines.append(cur)
+                cur = word
+                if len(lines) == max_lines:
+                    break
+            else:
+                cur = trial
+        else:
+            if cur:
+                lines.append(cur)
+            if len(lines) <= max_lines:
+                return lines, f
+    f = font(floor, role)
+    lines, cur = [], ""
+    for word in words:
+        trial = f"{cur} {word}".strip()
+        if cur and _tracked_w(d, trial, f, track) > max_w:
+            lines.append(cur)
+            cur = word
+        else:
+            cur = trial
+    if cur:
+        lines.append(cur)
+    if len(lines) > max_lines:
+        lines = lines[:max_lines]
+        last = lines[-1]
+        while last and _tracked_w(d, last + ELLIPSIS, f, track) > max_w:
+            last = last[:-1]
+        lines[-1] = last + ELLIPSIS
+    return lines, f
 
 
 def _tracked_w(d: ImageDraw.ImageDraw, text: str, f, track: float) -> float:
@@ -246,19 +356,36 @@ def render(deck, slot: Slot) -> Image.Image:
     sub_fg = slot.sub_fg or "#7A828C"
 
     if slot.align == "center":
-        # Value large and centred, caption beneath it: the action-bar shape.
-        if slot.label:
-            text, f = _fit(d, slot.label, avail, 26, 12, "value")
-            d.text((left + (w - left) // 2, 40), text, anchor="mm",
-                   fill=slot.fg, font=f)
-        if slot.sub:
-            text = slot.sub.upper() if slot.caps else slot.sub
-            cf = font(11, "caption")
-            track = 0.9 if slot.caps else 0.0
-            while text and _tracked_w(d, text, cf, track) > avail:
-                text = text[:-1]
-            x = left + (w - left - _tracked_w(d, text, cf, track)) / 2
-            _draw_tracked(d, (x, 58), text, cf, sub_fg, track)
+        cx = left + (w - left) / 2
+        if slot.icon:
+            # Icon over wrapped text. The icon says what kind of thing this is
+            # at a glance; the text carries the detail that distinguishes it
+            # from its neighbours, and gets two lines because at 96 px one line
+            # of anything specific is a truncated stub.
+            draw_icon(d, slot.icon, cx, top + 26, 30,
+                      slot.icon_color or slot.fg)
+            body = slot.label.upper() if slot.caps else slot.label
+            track = 0.7 if slot.caps else 0.0
+            lines, f = wrap(d, body, "caption" if slot.caps else "value",
+                            avail, 2, 13, 9, track)
+            y = 52
+            for line in lines:
+                lw = _tracked_w(d, line, f, track)
+                _draw_tracked(d, (cx - lw / 2, y), line, f, slot.fg, track)
+                y += f.size + 2
+        else:
+            # Value large and centred, caption beneath it: the action-bar shape.
+            if slot.label:
+                text, f = _fit(d, slot.label, avail, 26, 12, "value")
+                d.text((int(cx), 40), text, anchor="mm", fill=slot.fg, font=f)
+            if slot.sub:
+                text = slot.sub.upper() if slot.caps else slot.sub
+                cf = font(11, "caption")
+                track = 0.9 if slot.caps else 0.0
+                while text and _tracked_w(d, text, cf, track) > avail:
+                    text = text[:-1]
+                x = left + (w - left - _tracked_w(d, text, cf, track)) / 2
+                _draw_tracked(d, (x, 58), text, cf, sub_fg, track)
     else:
         # Name on top, qualifier beneath: the session-tile shape. Anchored to
         # the top rather than centred so tiles line up with each other however
@@ -380,10 +507,32 @@ def render_info(deck, text: str, sub: str = "", bg: str = "#000000",
             d.ellipse([dx + i * 11, h - 13, dx + i * 11 + 6, h - 7], fill=c)
         sub_right = dx - 10
 
-    head, hf = _fit(d, text, max(24, right - 15), 27, 12, "display")
-    d.text((11, 9), head, fill=fg, font=hf, anchor="lt")
     if sub:
+        # Headline plus caption: one line each.
+        head, hf = _fit(d, text, max(24, right - 15), 27, 12, "display")
+        d.text((11, 9), head, fill=fg, font=hf, anchor="lt")
         s, sf = _fit(d, sub.upper(), max(24, sub_right - 11), 12, 9,
                      "caption", track=0.8)
         _draw_tracked(d, (11, h - 21), s, sf, "#7A828C", 0.8)
+    else:
+        # No caption, so the headline may use both lines. A 248 px bar holds
+        # about 25 characters on one line, which turns any real sentence into a
+        # stub; two lines roughly doubles that and is the difference between
+        # quoting a question and hinting at one. The second line runs full width
+        # because only the first has to clear the tally.
+        # Each line has a different obstacle: the tally sits beside line one,
+        # the page dots beside line two. Clamping both to the narrower of the
+        # two would waste width, so they are clamped separately.
+        w1 = max(24, right - 15)
+        w2 = max(24, sub_right - 13)
+        one, f1 = _fit(d, text, w1, 27, 20, "display")
+        if one == text:
+            d.text((11, 9), one, fill=fg, font=f1, anchor="lt")
+        else:
+            lines, hf = wrap(d, text, "display", w2, 2, 22, 11)
+            y = 8 if len(lines) > 1 else 14
+            for i, line in enumerate(lines[:2]):
+                d.text((11, y), ellipsize(d, line, hf, w1 if i == 0 else w2),
+                       fill=fg, font=hf, anchor="lt")
+                y += hf.size + 3
     return img

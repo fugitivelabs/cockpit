@@ -198,6 +198,47 @@ ANSWER_NO = palette.ANSWER_DECLINE
 ANSWER_OTHER = palette.ANSWER_GRANT
 
 
+def _answer_icon(label: str) -> str:
+    """A shape for what the option says, or "" when we cannot tell.
+
+    The empty case is load-bearing. Real menus are not always yes/no — Grant hit
+    a Left / Right / type something / Chat prompt — and stamping a checkmark on
+    an option whose meaning we have not established would be inventing exactly
+    the semantics prompts.md forbids inferring. No icon is the honest render.
+    """
+    low = label.lower()
+    if low.startswith("no"):
+        return "cross"
+    if low.startswith("yes"):
+        # A second tick for the approval that also widens permission: it says
+        # "and again, and again", which is precisely what it does.
+        return "check-double" if ("," in label or " and " in low) else "check"
+    return ""
+
+
+def _answer_text(label: str) -> str:
+    """The part of the option worth putting on a 96 px key.
+
+    Previously this was `label.split(",")[0]`, which threw away the only thing
+    that distinguished the options: "Yes" and "Yes, and don't ask again for
+    example.com" both rendered as the word `Yes`. Two identical green keys, one
+    of which grants a standing permission.
+
+    So for an approval the TAIL is the label — "don't ask again for example.com"
+    — because the head is the part every option shares. For a decline the head
+    is the decision and the tail is a follow-up detail ("and tell Claude what to
+    do differently"), so the head wins. Everything here is the screen's own
+    words; nothing is invented.
+    """
+    head, _, tail = label.partition(",")
+    head, tail = head.strip(), tail.strip()
+    if head.lower().startswith("no") or not tail:
+        return head
+    if tail.lower().startswith("and "):
+        tail = tail[4:]
+    return tail
+
+
 def _answer_style(label: str) -> str:
     """Colour by what the option *says*, since that's all we can trust.
 
@@ -267,7 +308,6 @@ def answer_keys(dashboard: Dashboard, reader=None) -> Optional[dict]:
 def _answer_key(dashboard: Dashboard, digit, label: str, prompt) -> ActionKey:
     """One option as a key. `digit` of None means send Escape instead."""
     color = palette.ANSWER_CANCEL if digit is None else _answer_style(label)
-    short = label if len(label) <= 22 else label[:21] + "…"
     # Flooded like the board, but structurally unmistakable against it: centred
     # rather than left-aligned, one big word rather than project-over-task, and
     # ringed by a dark perimeter that nothing else on the deck has. Role has to
@@ -277,15 +317,22 @@ def _answer_key(dashboard: Dashboard, digit, label: str, prompt) -> ActionKey:
     # The caption says which key gets sent, not the option text again — the
     # label already carries that, and repeating it truncated ("2 · Yes, and d…")
     # spends the one line that could tell you what pressing actually does.
-    slot = Slot(label=short.split(",")[0][:14],
-                sub="cancel" if digit is None else f"sends {digit}",
+    # "Esc", not "cancel": it names the key it sends, which is the one thing
+    # about it that is literally true and the thing you can also press yourself.
+    text = "Esc" if digit is None else _answer_text(label)
+    icon = "" if digit is None else _answer_icon(label)
+    slot = Slot(label=text,
+                icon=icon,
                 caps=True, align="center",
                 bg=color,
                 fg=palette.ANSWER_INK,
-                sub_fg=palette.ANSWER_INK_DIM,
+                icon_color=palette.ANSWER_INK,
+                # The digit rides in the corner rather than in a caption line,
+                # so the two lines of body text can carry the option itself.
+                badge=str(digit) if digit is not None else "",
                 frame=over("#000000", 0.55, color),
                 frame_w=palette.ANSWER_FRAME_W,
-                key=f"ans:{digit}:{label[:12]}")
+                key=f"ans:{digit}:{label[:24]}")
 
     def run(long: bool) -> None:
         session = dashboard.focused_session()

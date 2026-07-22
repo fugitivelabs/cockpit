@@ -198,6 +198,8 @@ check("two options -> two answer keys plus Esc in the spare slot",
 check("key4 is labelled from the screen", bar[4].render().label == "Yes")
 check("key5 is labelled from the screen", bar[5].render().label == "No")
 check("spare slot becomes Esc", bar[6].render().label == "Esc")
+check("…and carries no icon, because Esc is not a yes or a no",
+      bar[6].render().icon == "")
 check("Yes is green", bar[4].render().bg == palette.GO)
 check("No is a bright neutral, NOT red — red means 'a session needs you', and\n"
       "      declining a prompt is always the safe move",
@@ -211,8 +213,10 @@ check("answer keys are centred, unlike the left-aligned session tiles",
 check("every answer key is framed — the one shape that means 'this key types'",
       all(bar[k].render().frame is not None and bar[k].render().frame_w >= 3
           for k in bar))
-check("the caption says what will be sent, not the label again",
-      bar[4].render().sub == "sends 1", bar[4].render().sub)
+check("the digit rides in the corner, freeing the body for the option text",
+      bar[4].render().badge == "1", bar[4].render().badge)
+check("…so the body carries the option itself",
+      bar[4].render().label == "Yes", bar[4].render().label)
 
 d3 = FakeDash(parse_prompt(FETCH))
 bar3 = answer_keys(d3)
@@ -255,8 +259,8 @@ four = Prompt(options=((1, "Left"), (2, "Right"), (3, "type something"),
 bar4 = answer_keys(FakeDash(four))
 check("a four-option menu takes all four keys", sorted(bar4) == [4, 5, 6, 7])
 check("…displacing Firefox", bar4[7].render().label != "Firefox")
-check("…and key7 is the fourth option", bar4[7].render().sub == "sends 4",
-      bar4[7].render().sub)
+check("…and key7 is the fourth option", bar4[7].render().badge == "4",
+      bar4[7].render().badge)
 check("…with no Esc key (keyboard Esc still works)",
       not any(c.render().label == "Esc" for c in bar4.values()))
 
