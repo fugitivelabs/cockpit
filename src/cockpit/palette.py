@@ -159,14 +159,25 @@ STATE = {
 
 ANSWER_AFFIRM = GO           # "Yes"
 ANSWER_GRANT = CAUTION       # "Yes, and don't ask again" — approval that widens
-ANSWER_DECLINE = "#C9CFD6"   # "No" — bright neutral: easy to hit, not an alarm
+ANSWER_DECLINE = WARNING     # "No"
 ANSWER_CANCEL = INERT        # Escape
 
-# Answer keys flood too, so they need their own ink. Every answer colour is
-# light, so all of them take dark text.
-ANSWER_INK = "#0A0A0B"
-ANSWER_INK_DIM = "#3A3F46"
-ANSWER_FRAME_W = 4
+# Answer keys are a QUIET field with the hue in the icon and the frame, not a
+# flooded one (Grant, 2026-07-22). Three flooded rows of saturated colour did
+# not sit with the rest of the surface, and the flood was doing work the icon
+# can do better now that icons render cleanly.
+#
+# **This is what lets "No" be red again.** The earlier objection stands — red
+# means "a session needs you" and must not be spent elsewhere — but that was an
+# argument about a red *field*. A red glyph on a dark key is a different object
+# from a flooded red tile: different row, different form, and the answer bar
+# only exists while a prompt is on screen. Green/yes and red/no are the most
+# over-learned pair in computing and are worth having where the stakes are
+# highest, so long as they cannot be mistaken for the board.
+ANSWER_BG = FURNITURE
+ANSWER_INK = INK
+ANSWER_INK_DIM = INK_DIM
+ANSWER_FRAME_W = 3
 
 # The one place two flooded keys can wear the same hue at once: a `waiting`
 # session tile and a permission-widening answer key are both amber. That is

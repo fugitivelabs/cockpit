@@ -178,39 +178,64 @@ ELLIPSIS = "..."
 ICONS = ("check", "check-double", "cross", "plus", "dot", "bar")
 
 
-def draw_icon(d: ImageDraw.ImageDraw, name: str, cx: float, cy: float,
+def draw_icon(img: Image.Image, name: str, cx: float, cy: float,
               size: float, color: str) -> None:
-    """Draw a named shape centred on (cx, cy), fitting a `size` box."""
-    s = size / 2.0
-    w = max(3, int(size * 0.17))
+    """Draw a named shape centred on (cx, cy), fitting a `size` box.
 
-    def check(ox: float = 0.0) -> None:
-        d.line([(cx + (-0.52 + ox) * s, cy + 0.05 * s),
-                (cx + (-0.12 + ox) * s, cy + 0.55 * s),
-                (cx + (0.62 + ox) * s, cy - 0.55 * s)],
-               fill=color, width=w, joint="curve")
+    **Supersampled, because PIL does not antialias lines.** Drawn directly, a
+    stroke at an arbitrary angle stair-steps: the cross reads crisp because its
+    two segments are exactly 45 degrees and land on whole pixels, while a
+    checkmark's shallow leg does not, so the two sat side by side looking like
+    they came from different sets. Rendering the shape into a mask at SS times
+    the size and downsampling with LANCZOS gives every angle the same clean
+    edge, then the colour is pasted through that mask.
+
+    The cost is a few hundred microseconds on a cache MISS only — an icon is
+    part of the Slot value, so a key that keeps showing the same icon never
+    redraws it at all.
+    """
+    ss = 4
+    box = max(8, int(size))
+    pad = 4
+    dim = (box + pad * 2) * ss
+    mask = Image.new("L", (dim, dim), 0)
+    m = ImageDraw.Draw(mask)
+    mid = dim / 2.0
+    s = (box / 2.0) * ss
+    w = max(2, int(size * 0.155)) * ss
+
+    def tick(ox: float = 0.0, scale: float = 1.0) -> None:
+        m.line([(mid + (-0.50 * scale + ox) * s, mid + 0.02 * scale * s),
+                (mid + (-0.13 * scale + ox) * s, mid + 0.40 * scale * s),
+                (mid + (0.52 * scale + ox) * s, mid - 0.42 * scale * s)],
+               fill=255, width=w, joint="curve")
 
     if name == "check":
-        check()
+        tick()
     elif name == "check-double":
-        # Two ticks: the second says "and again, and again" — the shape for an
-        # approval that also widens permission.
-        check(-0.55)
-        check(0.45)
+        # Two ticks, the trailing one behind: "and again, and again" — the shape
+        # for an approval that also widens permission.
+        tick(-0.46, 0.80)
+        tick(0.34, 0.80)
     elif name == "cross":
-        d.line([(cx - 0.5 * s, cy - 0.5 * s), (cx + 0.5 * s, cy + 0.5 * s)],
-               fill=color, width=w)
-        d.line([(cx - 0.5 * s, cy + 0.5 * s), (cx + 0.5 * s, cy - 0.5 * s)],
-               fill=color, width=w)
+        m.line([(mid - 0.46 * s, mid - 0.46 * s), (mid + 0.46 * s, mid + 0.46 * s)],
+               fill=255, width=w)
+        m.line([(mid - 0.46 * s, mid + 0.46 * s), (mid + 0.46 * s, mid - 0.46 * s)],
+               fill=255, width=w)
     elif name == "plus":
-        d.line([(cx - 0.5 * s, cy), (cx + 0.5 * s, cy)], fill=color, width=w)
-        d.line([(cx, cy - 0.5 * s), (cx, cy + 0.5 * s)], fill=color, width=w)
+        m.line([(mid - 0.5 * s, mid), (mid + 0.5 * s, mid)], fill=255, width=w)
+        m.line([(mid, mid - 0.5 * s), (mid, mid + 0.5 * s)], fill=255, width=w)
     elif name == "dot":
-        d.ellipse([cx - s * 0.4, cy - s * 0.4, cx + s * 0.4, cy + s * 0.4],
-                  fill=color)
+        m.ellipse([mid - s * 0.4, mid - s * 0.4, mid + s * 0.4, mid + s * 0.4],
+                  fill=255)
     elif name == "bar":
-        d.rectangle([cx - s * 0.5, cy - w / 2, cx + s * 0.5, cy + w / 2],
-                    fill=color)
+        m.rectangle([mid - s * 0.5, mid - w / 2, mid + s * 0.5, mid + w / 2],
+                    fill=255)
+    else:
+        return
+
+    flat = mask.resize((box + pad * 2, box + pad * 2), Image.LANCZOS)
+    img.paste(color, (int(cx - (box / 2 + pad)), int(cy - (box / 2 + pad))), flat)
 
 
 def ellipsize(d: ImageDraw.ImageDraw, text: str, f, max_w: float,
@@ -362,7 +387,7 @@ def render(deck, slot: Slot) -> Image.Image:
             # at a glance; the text carries the detail that distinguishes it
             # from its neighbours, and gets two lines because at 96 px one line
             # of anything specific is a truncated stub.
-            draw_icon(d, slot.icon, cx, top + 26, 30,
+            draw_icon(img, slot.icon, cx, top + 26, 30,
                       slot.icon_color or slot.fg)
             body = slot.label.upper() if slot.caps else slot.label
             track = 0.7 if slot.caps else 0.0

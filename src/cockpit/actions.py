@@ -19,7 +19,6 @@ import logging
 from typing import Optional
 
 from deck import Slot
-from deck.color import over
 
 from . import palette
 from .dashboard import ACTION_KEYS, ActionKey, Dashboard
@@ -321,16 +320,22 @@ def _answer_key(dashboard: Dashboard, digit, label: str, prompt) -> ActionKey:
     # about it that is literally true and the thing you can also press yourself.
     text = "Esc" if digit is None else _answer_text(label)
     icon = "" if digit is None else _answer_icon(label)
+    # A quiet field with the hue in the icon and the perimeter. The frame is
+    # what still says "this key types into a session" — without it these become
+    # nearly indistinguishable from the action-bar furniture, which is also dark
+    # and centred. Nothing else on the deck is framed, and unlike the focus
+    # marker this frame is always present, so it never shifts text by appearing.
     slot = Slot(label=text,
                 icon=icon,
                 caps=True, align="center",
-                bg=color,
+                bg=palette.ANSWER_BG,
                 fg=palette.ANSWER_INK,
-                icon_color=palette.ANSWER_INK,
+                icon_color=color,
+                sub_fg=palette.ANSWER_INK_DIM,
                 # The digit rides in the corner rather than in a caption line,
                 # so the two lines of body text can carry the option itself.
                 badge=str(digit) if digit is not None else "",
-                frame=over("#000000", 0.55, color),
+                frame=color,
                 frame_w=palette.ANSWER_FRAME_W,
                 key=f"ans:{digit}:{label[:24]}")
 

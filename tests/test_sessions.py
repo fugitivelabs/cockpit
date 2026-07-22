@@ -379,9 +379,10 @@ _hues = {name: st.color for name, st in palette.STATE.items()}
 check("every state hue is distinct", len(set(_hues.values())) == len(_hues))
 check("no session state uses the answer bar's green",
       palette.GO not in _hues.values())
-check("no answer colour reuses the warning red",
-      palette.WARNING not in (palette.ANSWER_AFFIRM, palette.ANSWER_GRANT,
-                              palette.ANSWER_DECLINE))
+check("answer hues live in glyphs, never in a flooded field",
+      palette.ANSWER_BG == palette.FURNITURE
+      and palette.ANSWER_BG not in {st.field for n, st in palette.STATE.items()
+                                    if st.needs_you})
 check("warm states are exactly the needs-you states",
       {n for n, st in palette.STATE.items() if st.needs_you}
       == {"blocked", "waiting"})

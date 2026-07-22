@@ -120,10 +120,18 @@ state_hues = {st.color for st in palette.STATE.values()}
 answer_hues = {palette.ANSWER_AFFIRM, palette.ANSWER_GRANT,
                palette.ANSWER_DECLINE}
 check("green never appears on the session board", palette.GO not in state_hues)
-check("red never appears on the answer bar",
-      palette.WARNING not in answer_hues)
-check("decline is not an alarm colour",
-      palette.ANSWER_DECLINE not in (palette.WARNING, palette.CAUTION))
+# Amended 2026-07-22. The rule was "red never on the answer bar", written when
+# both rows flooded their fields — two red FIELDS on screen would have been
+# genuinely ambiguous. The answer bar is now a quiet field with the hue in the
+# icon, so the invariant that matters is about form, not hue: the board owns
+# flooded colour, the answer bar owns glyphs, and no answer key floods.
+check("no answer key floods its field",
+      palette.ANSWER_BG == palette.FURNITURE)
+check("…so the board keeps sole ownership of a coloured FIELD",
+      all(st.field != palette.ANSWER_BG or n == "idle"
+          for n, st in palette.STATE.items()))
+check("decline is red again — over-learned, and now unmistakable as a glyph",
+      palette.ANSWER_DECLINE == palette.WARNING)
 check("affirm keeps green — the one mapping worth not inventing",
       palette.ANSWER_AFFIRM == palette.GO)
 check("a permission-widening yes is caution, not go",
@@ -233,6 +241,17 @@ for name, slot in cases.items():
         check(f"renders: {name}", img.size == (96, 96))
     except Exception as e:
         check(f"renders: {name}", False, f"{type(e).__name__}: {e}")
+
+# Icons are supersampled because PIL does not antialias lines: drawn directly, a
+# checkmark's shallow leg stair-steps while a cross's exact 45-degree diagonals
+# land on whole pixels, so the two read as coming from different sets.
+for _icon in ("check", "check-double", "cross"):
+    _px = render(DECK, Slot(icon=_icon, bg="#000000", icon_color="#FFFFFF",
+                            align="center"))
+    _levels = set(_px.crop((20, 8, 76, 50)).convert("L").tobytes())
+    _mid = [v for v in _levels if 40 < v < 215]
+    check(f"icon '{_icon}' is antialiased, not stair-stepped",
+          len(_mid) > 8, f"{len(_mid)} intermediate levels")
 
 check("a long label is truncated with an ASCII marker, not U+2026",
       "…" not in ELLIPSIS and ELLIPSIS == "...")

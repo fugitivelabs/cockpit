@@ -200,14 +200,22 @@ check("key5 is labelled from the screen", bar[5].render().label == "No")
 check("spare slot becomes Esc", bar[6].render().label == "Esc")
 check("…and carries no icon, because Esc is not a yes or a no",
       bar[6].render().icon == "")
-check("Yes is green", bar[4].render().bg == palette.GO)
-check("No is a bright neutral, NOT red — red means 'a session needs you', and\n"
-      "      declining a prompt is always the safe move",
-      bar[5].render().bg == palette.ANSWER_DECLINE)
-check("…so no answer key ever wears the warning hue",
-      palette.WARNING not in {bar[k].render().bg for k in bar})
-check("…and every answer key takes dark ink on its flooded field",
-      all(bar[k].render().fg == palette.ANSWER_INK for k in bar))
+# The hue moved from the field to the ICON and the frame: a quiet key with a
+# coloured glyph, not a flooded one.
+check("Yes is green", bar[4].render().icon_color == palette.GO)
+check("…on a quiet field, not a flooded one",
+      bar[4].render().bg == palette.ANSWER_BG)
+check("…with a check, drawn not typed", bar[4].render().icon == "check")
+# Red returns for "No" — but as a GLYPH on a dark key, never as a field. A
+# flooded red tile means "a session needs you"; a red cross on a quiet key in
+# the bottom row is a different object entirely, and green/red for yes/no is
+# the most over-learned pair there is.
+check("No is red again, in the icon", bar[5].render().icon_color == palette.WARNING)
+check("…and a cross", bar[5].render().icon == "cross")
+check("…but its FIELD is quiet — the flood is what meant 'session'",
+      bar[5].render().bg == palette.ANSWER_BG)
+check("no answer key floods its field with any state hue",
+      all(bar[k].render().bg == palette.ANSWER_BG for k in bar))
 check("answer keys are centred, unlike the left-aligned session tiles",
       all(bar[k].render().align == "center" for k in bar))
 check("every answer key is framed — the one shape that means 'this key types'",
@@ -222,9 +230,11 @@ d3 = FakeDash(parse_prompt(FETCH))
 bar3 = answer_keys(d3)
 check("three options fill all three slots", sorted(bar3) == [4, 5, 6])
 check("a permission-widening YES is amber, not green",
-      bar3[5].render().bg == palette.CAUTION, bar3[5].render().bg)
+      bar3[5].render().icon_color == palette.CAUTION, bar3[5].render().icon_color)
 check("…and is visibly distinct from the plain Yes",
-      bar3[4].render().bg != bar3[5].render().bg)
+      bar3[4].render().icon_color != bar3[5].render().icon_color)
+check("…carrying a doubled tick: approve, and again, and again",
+      bar3[5].render().icon == "check-double")
 
 print("\n[subject] the screen's own words for what is being asked")
 check("the announcement line is captured",
