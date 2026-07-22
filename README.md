@@ -54,7 +54,7 @@ Quit Elgato's app if it's installed: two writers fight over the display.
 src/deck/       the device library — diffing, caching, input, reconnect,
                 lifecycle. Knows nothing about Claude. Shareable on its own.
 src/cockpit/    the consumer — sessions, channels, the dashboard, actions.
-tests/          473 assertions, no hardware required
+tests/          481 assertions, no hardware required
 launchd/        the LaunchAgent and the `cockpit` management CLI
 docs/           architecture, operations, prompts, roadmap
 ```
