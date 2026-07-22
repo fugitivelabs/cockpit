@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cockpit"
+version = "0.3.0"
+description = "A physical control surface for AI coding-agent sessions, on a Stream Deck"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Grant Fowler" }]
+keywords = ["stream deck", "elgato", "claude code", "control surface", "macos"]
+
+# Two packages, and the split is deliberate rather than incidental:
+#   deck    — use-case-agnostic device layer. Knows nothing about Claude,
+#             terminals, or sessions. Shareable on its own.
+#   cockpit — everything that knows what a session is.
+# Keeping them siblings is what stops agent-specific logic leaking into the
+# device layer; see docs/architecture.md.
+dependencies = [
+    "streamdeck==0.9.8",
+    "pillow>=12,<13",
+    # AXStringForRange — reading a terminal's visible text. AppleScript cannot
+    # call parameterized Accessibility attributes at all, so this is not
+    # optional for answering prompts (docs/prompts.md).
+    "pyobjc-framework-ApplicationServices>=10",
+]
+
+[project.scripts]
+cockpit-daemon = "cockpit.daemon:main"
+cockpit-doctor = "cockpit.doctor:main"
+cockpit-wire = "cockpit.claude_config:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["deck*", "cockpit*"]
+
+[tool.setuptools.package-data]
+"*" = ["*.md"]

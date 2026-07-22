@@ -1,0 +1,219 @@
+#!/usr/bin/env bash
+# cockpit — manage the Stream Deck cockpit LaunchAgent.
+#
+# One verb-based tool over launchd so you never hand-type a bootstrap/bootout/
+# kickstart incantation. The two that matter:
+#
+#   cockpit restart   after a CODE change  (graceful SIGTERM -> fresh process)
+#   cockpit update    after ANY change     (reloads the plist only if it changed;
+#                                           otherwise just restarts the code)
+#
+# Because launchd runs `python -m cockpit` from this repo, a code edit needs only
+# a process restart — Python re-imports on each start. The plist must be reloaded
+# only when the plist itself changes (args, paths, KeepAlive) or the repo moves.
+#
+# `cockpit link` symlinks this script onto your PATH so you can type `cockpit`
+# from anywhere; it still lives in — and runs from — the repo.
+set -euo pipefail
+
+# Neutral, non-personal label: per-user launchd domains (gui/$uid) namespace it,
+# so the same fixed label is collision-free across everyone who runs this.
+LABEL="local.cockpit.daemon"
+
+# Resolve through a PATH symlink (e.g. ~/.local/bin/cockpit) back to the real
+# file in the repo, so REPO/HERE point at the checkout, not the symlink's dir.
+SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "$SOURCE" ]]; do
+    dir="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+    SOURCE="$(readlink "$SOURCE")"
+    [[ "$SOURCE" != /* ]] && SOURCE="$dir/$SOURCE"
+done
+HERE="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+REPO="$(cd "$HERE/.." && pwd)"
+PYTHON="$REPO/.venv/bin/python"
+LOGDIR="$HOME/Library/Logs"
+AGENTS="$HOME/Library/LaunchAgents"
+PLIST="$AGENTS/$LABEL.plist"
+TEMPLATE="$HERE/$LABEL.plist.template"
+DOMAIN="gui/$(id -u)"
+SERVICE="$DOMAIN/$LABEL"
+STRUCT_LOG="$LOGDIR/cockpit.log"
+RAW_LOG="$LOGDIR/cockpit.out.log"
+HEARTBEAT="$LOGDIR/cockpit.heartbeat"
+
+die() { echo "error: $*" >&2; exit 1; }
+loaded() { launchctl print "$SERVICE" >/dev/null 2>&1; }
+
+render_plist() {   # render template -> $1
+    [[ -x "$PYTHON" ]] || die "venv python not found at $PYTHON — create it (see $REPO/README.md Setup)"
+    mkdir -p "$AGENTS" "$LOGDIR"
+    sed -e "s|__PYTHON__|$PYTHON|g" \
+        -e "s|__WORKDIR__|$REPO|g" \
+        -e "s|__LOGDIR__|$LOGDIR|g" \
+        "$TEMPLATE" > "$1"
+}
+
+cmd_install() {
+    render_plist "$PLIST"
+    echo "wrote $PLIST"
+    loaded && { echo "reloading (was already loaded)"; launchctl bootout "$SERVICE" 2>/dev/null || true; }
+    launchctl bootstrap "$DOMAIN" "$PLIST"
+    launchctl kickstart -k "$SERVICE"
+    echo "installed + started. logs: cockpit logs"
+}
+
+cmd_uninstall() {
+    loaded && { launchctl bootout "$SERVICE" 2>/dev/null || true; echo "booted out $LABEL"; } \
+           || echo "$LABEL not loaded"
+    [[ -f "$PLIST" ]] && { rm -f "$PLIST"; echo "removed $PLIST"; }
+    echo "(logs left in $LOGDIR)"
+}
+
+cmd_start() {
+    if loaded; then
+        launchctl kickstart "$SERVICE"; echo "started"
+    else
+        [[ -f "$PLIST" ]] || die "not installed — run: cockpit install"
+        launchctl bootstrap "$DOMAIN" "$PLIST"; echo "loaded + started"
+    fi
+}
+
+cmd_stop() {   # graceful: SIGTERM -> exit 0 -> KeepAlive{SuccessfulExit:false} leaves it down
+    loaded || { echo "not loaded"; return 0; }
+    launchctl kill SIGTERM "$SERVICE" 2>/dev/null || true
+    echo "sent SIGTERM (graceful) — stays down until next login or: cockpit start"
+}
+
+cmd_restart() {   # code-change restart: graceful kill + fresh process, same plist
+    loaded || die "not loaded — run: cockpit install"
+    launchctl kickstart -k "$SERVICE"
+    echo "restarted (fresh process — picks up code changes)"
+}
+
+cmd_update() {   # do the right thing: reload plist only if it changed, else just restart
+    [[ -f "$PLIST" ]] || die "not installed — run: cockpit install"
+    local tmp; tmp="$(mktemp)"
+    render_plist "$tmp"
+    if ! diff -q "$tmp" "$PLIST" >/dev/null 2>&1; then
+        echo "plist changed (paths/args/KeepAlive) — reloading service definition"
+        cp "$tmp" "$PLIST"
+        loaded && launchctl bootout "$SERVICE" 2>/dev/null || true
+        launchctl bootstrap "$DOMAIN" "$PLIST"
+        launchctl kickstart -k "$SERVICE"
+    else
+        echo "code-only update — restarting process"
+        loaded && launchctl kickstart -k "$SERVICE" || cmd_start
+    fi
+    rm -f "$tmp"
+    echo "note: if requirements.txt changed, run '$PYTHON -m pip install -r $REPO/requirements.txt' first"
+}
+
+cmd_status() {
+    if loaded; then
+        local out pid last
+        out="$(launchctl print "$SERVICE" 2>/dev/null)"
+        # launchctl print indents with a tab and uses " = "; anchor on the field.
+        pid="$(awk -F' = ' '/^[[:space:]]*pid = /{gsub(/[^0-9]/,"",$2); print $2; exit}' <<<"$out")"
+        last="$(awk -F' = ' '/^[[:space:]]*last exit code = /{gsub(/[^0-9-]/,"",$2); print $2; exit}' <<<"$out")"
+        echo "loaded    : yes ($SERVICE)"
+        echo "pid       : ${pid:-<not running>}"
+        echo "last exit : ${last:-n/a}"
+    else
+        echo "loaded    : no"
+        [[ -f "$PLIST" ]] && echo "            (plist present; run: cockpit start)" \
+                          || echo "            (not installed; run: cockpit install)"
+    fi
+    if [[ -f "$HEARTBEAT" ]]; then
+        local now mtime age; now=$(date +%s); mtime=$(stat -f %m "$HEARTBEAT" 2>/dev/null || echo 0)
+        age=$(( now - mtime ))
+        echo "heartbeat : $(cat "$HEARTBEAT" 2>/dev/null | tr -d '\n')  (${age}s ago)"
+        if (( age > 45 )); then echo "            ^ stale — process may be down or wedged"; fi
+    else
+        echo "heartbeat : none yet"
+    fi
+    return 0
+}
+
+cmd_logs() {
+    case "${1:-}" in
+        raw|-r) echo "== $RAW_LOG =="; touch "$RAW_LOG"; tail -f "$RAW_LOG" ;;
+        *)      echo "== $STRUCT_LOG (structured; 'cockpit logs raw' for launchd capture) =="
+                touch "$STRUCT_LOG"; tail -f "$STRUCT_LOG" ;;
+    esac
+}
+
+cmd_link() {   # symlink this script onto PATH so `cockpit` works from anywhere
+    local self="$HERE/cockpit" target=""
+    for d in "$HOME/.local/bin" "/opt/homebrew/bin" "/usr/local/bin"; do
+        if echo "$PATH" | tr ':' '\n' | grep -Fxq "$d" && [[ -w "$d" ]]; then target="$d"; break; fi
+    done
+    [[ -n "$target" ]] || die "no writable directory found on \$PATH — add one (e.g. ~/.local/bin) and retry"
+    ln -sf "$self" "$target/cockpit"
+    echo "linked $target/cockpit -> $self"
+    echo "open a new shell (or rehash), then: cockpit status"
+}
+
+cmd_unlink() {   # remove any cockpit symlinks we created on PATH
+    local removed=0
+    for d in "$HOME/.local/bin" "/opt/homebrew/bin" "/usr/local/bin"; do
+        if [[ -L "$d/cockpit" ]]; then rm -f "$d/cockpit"; echo "removed $d/cockpit"; removed=1; fi
+    done
+    (( removed )) || echo "no cockpit symlink found on PATH"
+}
+
+cmd_foreground() {   # dev loop: stop the agent, run in this terminal, Ctrl-C to quit
+    loaded && { echo "stopping the managed instance so the device is free…"; launchctl kill SIGTERM "$SERVICE" 2>/dev/null || true; sleep 1; }
+    echo "running in foreground (Ctrl-C to quit; the LaunchAgent stays installed)"
+    cd "$REPO" && PYTHONPATH="$REPO/src" exec "$PYTHON" -m cockpit --debug
+}
+
+cmd_wire() {
+    cd "$REPO" && PYTHONPATH="$REPO/src" exec "$PYTHON" -m cockpit.claude_config "$@"
+}
+
+cmd_doctor() {
+    cd "$REPO" && PYTHONPATH="$REPO/src" exec "$PYTHON" -m cockpit.doctor "$@"
+}
+
+usage() {
+    cat <<EOF
+cockpit — manage the Stream Deck cockpit LaunchAgent
+
+  link         symlink this script onto \$PATH so 'cockpit' works anywhere
+  unlink       remove that symlink
+  install      render plist for this machine, load, and start (idempotent)
+  uninstall    stop and remove the LaunchAgent (logs kept)
+  start        start it (load first if needed)
+  stop         graceful SIGTERM; stays down until next login / 'start'
+  restart      after a CODE change: graceful restart, fresh process
+  update       after ANY change: reload plist only if it changed, else restart
+  status       loaded? pid? last exit? heartbeat age?
+  doctor       check device, permissions, and channel wiring — with fixes
+  wire         point Claude Code at this daemon (idempotent; --remove to undo)
+  logs [raw]   tail the structured log (or the raw launchd capture)
+  foreground   stop the agent and run it here with --debug (dev loop)
+
+typical loops:
+  edit deck/*.py or cockpit/*.py   ->  cockpit restart
+  edit the plist / move the repo   ->  cockpit update
+  iterating fast on the daemon     ->  cockpit foreground
+EOF
+}
+
+case "${1:-}" in
+    link)       cmd_link ;;
+    unlink)     cmd_unlink ;;
+    install)    cmd_install ;;
+    uninstall)  cmd_uninstall ;;
+    start)      cmd_start ;;
+    stop)       cmd_stop ;;
+    restart)    cmd_restart ;;
+    update)     cmd_update ;;
+    status)     cmd_status ;;
+    doctor)     shift; cmd_doctor "$@" ;;
+    wire)       shift; cmd_wire "$@" ;;
+    logs)       shift; cmd_logs "$@" ;;
+    foreground) cmd_foreground ;;
+    ""|-h|--help|help) usage ;;
+    *)          usage; exit 1 ;;
+esac

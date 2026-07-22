@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Per-user LaunchAgent for the Stream Deck cockpit daemon.
+
+  A LaunchAgent, not a LaunchDaemon: the daemon's session-focus (AppleScript
+  against Terminal) only exists inside the logged-in Aqua session, which is
+  also where the USB device lives. A system-context LaunchDaemon has neither.
+
+  Placeholders (__LIKE_THIS__) are filled in by `cockpit install` from the real
+  repo and venv paths. Do not bootstrap this template directly.
+
+  The label is intentionally neutral (no username) — per-user launchd domains
+  (gui/$uid) make it collision-free for anyone who runs this.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>local.cockpit.daemon</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__PYTHON__</string>
+        <string>-m</string>
+        <string>cockpit</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__WORKDIR__</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PYTHONPATH</key>
+        <string>__WORKDIR__/src</string>
+    </dict>
+
+    <!-- Start at login. -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Restart on a crash (non-zero exit / signal), but NOT on a clean exit.
+         A graceful SIGTERM shutdown exits 0, so `launchctl bootout` stops it and
+         it stays stopped; a real crash or an absent-device exit(1) is retried. -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <!-- No crash-loop hammering: at least 10s between spawns. -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <!-- Raw catch-all: launchd captures stdout/stderr here (pre-logging-config
+         tracebacks land in this file). The clean, structured log the daemon
+         writes itself is ~/Library/Logs/cockpit.log. -->
+    <key>StandardOutPath</key>
+    <string>__LOGDIR__/cockpit.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>__LOGDIR__/cockpit.out.log</string>
+
+    <key>ProcessType</key>
+    <string>Interactive</string>
+</dict>
+</plist>
