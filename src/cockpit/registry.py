@@ -177,6 +177,7 @@ class Registry:
             return
         with self._lock:
             rec = self._by_id.setdefault(session_id, SessionRecord(session_id))
+            before = rec.flag
             if cwd:
                 rec.cwd = cwd
             rec.updated_at = self._clock()
@@ -188,7 +189,12 @@ class Registry:
             else:
                 log.debug("session %s keeps %s over %s", session_id, rec.flag, flag)
                 return
-        log.info("session %s flag -> %s", session_id, flag or "clear")
+            changed = rec.flag != before
+        # Only a real transition is worth a line. PreToolUse clears on every
+        # tool call, so logging unconditionally would bury the events that
+        # matter under a clear-per-Read.
+        if changed:
+            log.info("session %s flag -> %s", session_id, flag or "clear")
 
     def forget(self, session_id: str) -> None:
         with self._lock:
