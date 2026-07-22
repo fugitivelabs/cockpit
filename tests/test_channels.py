@@ -117,10 +117,17 @@ q.set_flag("sess-q", BLOCKED)
 clock[0] += 200.0
 check("a blocked record survives going quiet — the prompt is still up",
       q.by_tty()["/dev/ttys098"].flag == BLOCKED)
-clock[0] += 500.0
-check("…but the flag TTL still bounds it, so a ghost cannot live forever",
+# Both of these sit well past STALE_JOIN_S, so they straddle the TTL and
+# nothing else — the point being that FLAG_TTL_S is what governs now. Checking
+# only far past both timers would pass under the old rule too, and prove
+# nothing about which one is doing the work.
+clock[0] += 390.0
+check("…right up to the TTL, which is the timer that now governs it",
+      q.by_tty()["/dev/ttys098"].flag == BLOCKED)
+clock[0] += 20.0
+check("…and no further, so a ghost cannot live forever",
       "/dev/ttys098" not in q.by_tty())
-clock[0] -= 700.0
+clock[0] -= 610.0
 
 # Quit claude and start it again in the same window: same tty, new session, and
 # the dead record can now outlive its session — so the tty collision this fix
@@ -147,6 +154,28 @@ reverse.set_flag("older", BLOCKED)
 check("…and insertion order does not decide it",
       reverse.by_tty()["/dev/ttys007"].session_id == "newer")
 clock[0] += 1.0
+
+# The two above are not redundant: the forward case fails if the comparison is
+# ever inverted, the reverse case fails if it is dropped altogether. Neither
+# catches both, and dropping it is the likelier regression.
+
+# A tie has no recency left to read, so it must not fall back to insertion
+# order — that is the accident this rule replaced. It breaks toward the record
+# with no flag, because a false red on a live window is the worse mistake.
+for order in ("ghost first", "live first"):
+    tie = Registry(clock=lambda: clock[0], ttl=600.0)
+    if order == "ghost first":
+        tie.note_statusline("ghost", tty="/dev/ttys006")
+        tie.set_flag("ghost", BLOCKED)
+        tie.note_statusline("live", tty="/dev/ttys006")
+    else:
+        tie.note_statusline("live", tty="/dev/ttys006")
+        tie.note_statusline("ghost", tty="/dev/ttys006")
+        tie.set_flag("ghost", BLOCKED)
+    won = tie.by_tty()["/dev/ttys006"]
+    check(f"a same-tick tie breaks toward the unflagged record ({order})",
+          won.session_id == "live" and won.flag is None,
+          f"{won.session_id} flag={won.flag}")
 
 r.set_flag("sess-b", BLOCKED)
 check("a hook before any statusline is kept", len(r) == 3)

@@ -89,6 +89,25 @@ def _rank(flag: Optional[str]) -> int:
     return _FLAG_RANK.get(flag, 0)
 
 
+def _supersedes(candidate: "SessionRecord", prior: "SessionRecord") -> bool:
+    """Which of two records claiming one tty is the live session? See `by_tty`.
+
+    Recency decides it, because a tty is reused by a *later* session than the
+    one that left it. When the two are indistinguishable — identical
+    `updated_at`, which a coarse clock or two hooks in one tick can produce —
+    there is no recency signal left, so the tie breaks toward the safer wrong
+    answer instead of toward whichever record happened to be inserted first.
+
+    Safer is unflagged. Losing a flag costs an alert you would have seen
+    anyway the moment the session speaks again; keeping a dead session's flag
+    paints a false red on somebody else's window, which is the failure this
+    whole join is built to avoid.
+    """
+    if candidate.updated_at != prior.updated_at:
+        return candidate.updated_at > prior.updated_at
+    return prior.flag is not None and candidate.flag is None
+
+
 @dataclass
 class SessionRecord:
     """What the channels know about one session id."""
@@ -192,14 +211,23 @@ class Registry:
         tty proves nothing about *whose* it is — quit `claude` and start it
         again in the same window and the old record still names a real
         terminal — so the guard is the record itself: when two claim one tty,
-        the more recently updated wins. Explicitly, below. That used to fall
-        out of dict insertion order, which was right by accident and only while
+        the more recently updated wins (`_supersedes`). That used to fall out
+        of dict insertion order, which was right by accident and only while
         records could not outlive their sessions.
 
-        The residual hazard is a dead flagged record whose tty is reused before
-        the new session's first statusline report. It is bounded by
-        `FLAG_TTL_S`, and mostly masked: a starting session shows a spinner,
-        and `fuse_state` gives a spinning title precedence over any flag.
+        **The residual hazard, stated honestly**, is a dead flagged record
+        whose tty is reused before the new session's first statusline report.
+        For that window the ghost is the only claimant, so `_supersedes` has
+        nothing to compare and the stale flag paints the new window. Nothing
+        masks it: a session that has not started a turn has no task field, and
+        `parse_title` reads that as *idle*, not spinning, so `fuse_state` has
+        no polled truth to overrule the flag with. (Checked 2026-07-22 —
+        an earlier version of this comment claimed the spinner covered it,
+        which is true only once the new session takes its first turn.)
+
+        It is bounded by `FLAG_TTL_S`, which this change widens from the old
+        120s to 1800s — a real regression in exchange for the fix, and the
+        reason to reach for eviction on the raw window list if it ever bites.
 
         Expired flags are dropped here rather than mutated in place, so a
         reader never depends on a writer having run recently.
@@ -222,7 +250,7 @@ class Registry:
                 if (now - copy.updated_at) > STALE_JOIN_S and copy.flag is None:
                     continue
                 prior = out.get(copy.tty)
-                if prior is not None and prior.updated_at >= copy.updated_at:
+                if prior is not None and not _supersedes(copy, prior):
                     continue
                 out[copy.tty] = copy
         return out
