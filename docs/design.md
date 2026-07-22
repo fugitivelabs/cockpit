@@ -125,6 +125,209 @@ Moved to **[prompts.md](prompts.md)** — it grew into the most safety-critical
 document here, and burying it inside a design rationale was the wrong place for
 knowledge you must read before touching the answer keys.
 
+## The colour language — decided 2026-07-22
+
+Settled in conversation with Grant, after the first redesign pass proposed
+giving up colour-for-status entirely and was rejected. Colour carries status;
+the fix was to stop *everything else* borrowing the status palette.
+
+### What was actually wrong
+
+Not "the colours were similar" — they were the same literals in three files:
+
+| hex pair | meant |
+|---|---|
+| `("#0E2A16", "#4CD964")` | `STYLE["working"]` **and** `ANSWER_YES` |
+| `("#3A0A0A", "#FF6B6B")` | `STYLE["blocked"]`, `ANSWER_NO`, **and** `error_slot()` |
+| `#3FA7D6` | the `waiting` accent, `Slot.bar_color`'s default, `meter()`'s default |
+
+So red meant *a session is blocked*, *No*, and *the renderer crashed*, all
+visible simultaneously — green meant *working* on the top row and *Yes* on the
+bottom row. Colour cannot carry status while three unrelated things wear the
+same coat. Everything now lives in [palette.py](../src/cockpit/palette.py), and
+`tests/test_visual.py` asserts the invariants, because this is drift that no
+type can catch.
+
+### The rule
+
+**A hue means one thing, deck-wide.**
+
+    red      warning    a session has stopped and cannot continue without you
+    amber    caution    wants attention, but is not blocking
+    green    go         affirmative — the answer bar only, never a session state
+    blue     advisory   in motion; nothing for you to do
+    grey     inert      idle, declined, disabled, furniture
+
+Two consequences are the point rather than side effects:
+
+**`working` is blue, not green.** Green for "Yes" is the most over-learned
+mapping in computing, and green-for-working was a convention this project
+invented. When they collide, the invented one yields — so the answer bar keeps
+green and the board gives it up.
+
+**"No" is a bright neutral, not red.** Declining a permission prompt is always
+the safe move. Alarm-colouring it both misspends the deck's scarcest signal and
+nudges toward approving, on the one row that types into a live session — see
+[prompts.md](prompts.md) for why that nudge is the wrong direction.
+
+**Warm means act; cool means ignore.** blocked/waiting are warm, working/idle
+cool. That is a second, coarser read that survives peripheral vision and
+colour-blindness — you can tell whether the board wants anything without
+resolving a single hue. The state is *also* spelled out on the tile, because
+colour alone is not a label.
+
+This is the aviation annunciator convention (red warning, amber caution, blue
+advisory), which is well-trodden and, given what this project is called, hard to
+argue with.
+
+### Focus is mass at the bottom, not an outline
+
+Two pixels was invisible; four was still "a thin white line" on real glass. The
+bezel and the viewing angle eat any hairline, and a saturated field crowds it
+further. So focus is **mass**: a solid white bar thick enough to read as a block.
+
+It sits at the **bottom**. A top cap was tried first and worked visually, but it
+pushed the project name down by its own height — so the title sat at one of two
+heights depending on which session you were in, and the row read as disjointed.
+The label is anchored to the top of the tile, so a bottom band buys the same
+white for free. No frame either, for the same reason: an inset perimeter shifts
+the text sideways by its own width. **Focus must be addable and removable
+without anything else on the tile twitching**, which is now a test —
+`test_visual.py` renders a tile focused and unfocused and asserts the entire
+text area is pixel-identical.
+
+That is what `foot` exists for in `Slot`: the mirror of `rule`, for markers that
+must not disturb the type. The context meter stacks above it rather than under
+it, so the two never overdraw.
+
+Related, and a genuine bug: `pulse` used to dim *all* chrome, so a white focus
+frame turned grey whenever the tile under it happened to breathe — the one tile
+you were looking at got the weakest indicator. Pulse now moves the **field
+only**. Edges carry structure, and structure answers a different question than
+whatever is animating.
+
+### Focus stopped being a tint
+
+`FOCUS_LIFT = 0.30` lightened the focused tile toward white, which desaturates:
+blocked's field landed on `#755353`, a muted mauve, and working's on `#566A5C`, a
+grey-green. The tile you were looking at was the one whose status was hardest to
+read — a direct tax on the thing colour is for. Focus is now a white perimeter,
+so hue stays at full strength and the two questions ("which needs me" vs "which
+am I in") stop competing.
+
+### A quiet deck is one surface
+
+`idle` tiles and action-bar keys drifted to different darks — `#2C323B` against
+`#0E0F12`, more than three times the luminance — so a board with nothing
+happening read as two stacked shades of grey, carrying no meaning. They now
+share one `QUIET` field.
+
+The board and the controls are already told apart by **structure** (left-aligned
+project-over-task versus a centred value over a small-caps caption). Brightness
+saying it a second time, badly, was just inconsistency. And a uniform quiet
+surface is what makes a single coloured tile shout.
+
+### Role is carried by structure, not colour
+
+A session tile, an inert info key, and a key that types `2` into a live session
+used to be the same object in different colours. Now they are different shapes:
+
+- **session tile** — top rule whose thickness scales with urgency, name, state
+- **action key** — no rule, value centred over a small-caps caption: furniture
+- **answer key** — a full perimeter, which nothing else on the deck has
+
+That last one matters most. Role should be legible without reading and without
+depending on hue: the perimeter says *this key types into a session*, whatever
+colour it happens to be.
+
+### Motion — two tiers, and opt-in per state
+
+**Revised 2026-07-22 after living with it: `blocked` does not move.** A breathing
+red tile is intolerable to sit beside for a working day, and once the field is a
+saturated flood the colour is already doing the attention-getting the pulse was
+there for. Loud and still beats loud and moving. `waiting` still breathes — it is
+the quieter warm state and the one most easily missed.
+
+That makes motion a per-state flag (`StateStyle.breathes` / `.flashes`) rather
+than something `needs_you` implies. The machinery is untouched and re-enabling it
+is a one-word change in the palette. `animating()` reports only genuine movement,
+so a static state does not speed the loop up either — switching it off is a real
+saving, not just a cosmetic one.
+
+Only warm states may move. If everything animates, motion stops meaning anything.
+
+- **Onset** — a decaying flash on the *transition into* a needs-you state.
+  "This just happened."
+- **Sustain** — a slow breathe for as long as it stays there. "This is still
+  true."
+
+Both, because neither covers the other: a flash alone is missed if you were not
+looking, and a sustain alone is wallpaper by the end of the first day. A session
+already blocked when the daemon starts does **not** flash — a restart is not the
+same event as a session blocking.
+
+The mechanism is generic and lives in [anim.py](../src/deck/anim.py). The trick
+that makes it affordable is **quantization**: values snap to `STEPS` buckets, so
+a breathing key resolves to ~10 distinct `Slot`s — ten cached images, then a
+100% cache hit rate forever — and `flush()`'s diff still suppresses the write
+within a bucket. Measured: `render()` is 4.7 us, all eight keys re-render in
+25 us per tick, 0.03% of a core at the fast tick. Without quantization every
+frame would be an unseen slot paying a full ~1.3 ms rasterise plus a USB write.
+
+`App` ticks fast only while the view reports `animating()`, and `CockpitView`
+answers for *visible* components only — a blocked session two pages away costs
+nothing.
+
+### Where the deck/cockpit line holds
+
+Grant asked for as much as possible at the library level, and most of it is
+there: `deck/color.py` (colour arithmetic), `deck/anim.py` (phase, easing,
+quantization), and the `Slot` drawing vocabulary — rule, frame, tracked small
+caps, hairline meter, pulse.
+
+**What deliberately stayed in `cockpit/`: the meanings.** `deck/` must never
+learn that red means blocked, or that blocked breathes. It knows how to move a
+colour toward white and how to make a number wobble; what any of it *signifies*
+is the consumer's business. That is the split
+[architecture.md](architecture.md) calls load-bearing, and a palette in the
+library would be the first thing to break it.
+
+### The info bar reports, or it quotes
+
+Revised 2026-07-22. It used to shout `2 NEEDS YOU` in red across the full width
+whenever anything wanted attention. That is gone: the coloured chips already
+carry the tally, the board itself is unmissable, and a full-width alarm for
+something two other channels are already saying is noise.
+
+So the bar has two modes:
+
+- **calm** — `4 sessions`, plus a chip per non-zero state in that state's hue.
+- **being asked** — the screen's own words for what is about to happen, lifted
+  verbatim: `Fetch https://example.com`, `Create ~/.claude/probe.txt`. That tells
+  you what you are approving in a way no count or colour can, and it is the one
+  moment the bar has something better to say than how many sessions exist.
+
+While quoting, the tally drops to the needs-you states only. At 248 px the chips
+compete with the headline for the only line that can hold a sentence, and the
+calm states are the ones you would not act on anyway.
+
+`Prompt.subject` (axread.py) carries it. Two properties matter and both are
+tested: capturing it **cannot change whether a menu is recognised** — it is read
+after the fact and can only ever be `""` — and it is **excluded from the
+press-time guard**, which still compares `options` and nothing else. Letting a
+cosmetic redraw of the context line veto a still-valid answer would be a
+regression in exactly the direction [prompts.md](prompts.md) warns about.
+
+### Also fixed on the way past
+
+`_FONT_PATHS` listed `/System/Library/Fonts/SFNSDisplay.ttf` first — a file that
+has not shipped on macOS for several releases — so every lookup fell through to
+`Helvetica.ttc` **index 0, Regular**. The deck had no bold on it at all. Faces
+inside a `.ttc` need an explicit index; asking without one silently gets you
+Regular. Fonts are now named roles with fallback chains, and the workhorse is a
+condensed face, because a 96 px key is width-bound and condensed buys several
+points of size on the same string.
+
 ## Open questions
 
 - **Ordering: priority vs fixed slots.** Blocked sessions floating to the top puts

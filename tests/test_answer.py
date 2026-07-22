@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
 from cockpit import actions as actions_mod
+from cockpit import palette
 from cockpit.actions import ACTION_BG, answer_keys
 from cockpit.axread import Prompt, parse_prompt
 from cockpit.sessions import Session
@@ -197,16 +198,53 @@ check("two options -> two answer keys plus Esc in the spare slot",
 check("key4 is labelled from the screen", bar[4].render().label == "Yes")
 check("key5 is labelled from the screen", bar[5].render().label == "No")
 check("spare slot becomes Esc", bar[6].render().label == "Esc")
-check("Yes is green", bar[4].render().accent == "#4CD964")
-check("No is red", bar[5].render().accent == "#FF6B6B")
+check("Yes is green", bar[4].render().bg == palette.GO)
+check("No is a bright neutral, NOT red — red means 'a session needs you', and\n"
+      "      declining a prompt is always the safe move",
+      bar[5].render().bg == palette.ANSWER_DECLINE)
+check("…so no answer key ever wears the warning hue",
+      palette.WARNING not in {bar[k].render().bg for k in bar})
+check("…and every answer key takes dark ink on its flooded field",
+      all(bar[k].render().fg == palette.ANSWER_INK for k in bar))
+check("answer keys are centred, unlike the left-aligned session tiles",
+      all(bar[k].render().align == "center" for k in bar))
+check("every answer key is framed — the one shape that means 'this key types'",
+      all(bar[k].render().frame is not None and bar[k].render().frame_w >= 3
+          for k in bar))
+check("the caption says what will be sent, not the label again",
+      bar[4].render().sub == "sends 1", bar[4].render().sub)
 
 d3 = FakeDash(parse_prompt(FETCH))
 bar3 = answer_keys(d3)
 check("three options fill all three slots", sorted(bar3) == [4, 5, 6])
 check("a permission-widening YES is amber, not green",
-      bar3[5].render().accent == "#E8B923", bar3[5].render().accent)
+      bar3[5].render().bg == palette.CAUTION, bar3[5].render().bg)
 check("…and is visibly distinct from the plain Yes",
-      bar3[4].render().accent != bar3[5].render().accent)
+      bar3[4].render().bg != bar3[5].render().bg)
+
+print("\n[subject] the screen's own words for what is being asked")
+check("the announcement line is captured",
+      parse_prompt(FETCH).subject == "Fetch https://example.com",
+      repr(parse_prompt(FETCH).subject))
+check("…even when a question line sits between it and the options",
+      parse_prompt(BASH).subject
+      == "I'll write a probe file outside the project.",
+      repr(parse_prompt(BASH).subject))
+check("a screen with no announcement yields an empty subject, not a crash",
+      parse_prompt(" \u276f 1. Yes\n   2. No\n\n Esc to cancel\n").subject == "")
+check("capturing it did not change what counts as a menu",
+      parse_prompt(FETCH).options == ((1, "Yes"),
+                                      (2, "Yes, and don't ask again for example.com"),
+                                      (3, "No, and tell Claude what to do differently")))
+check("a free-text follow-up is still refused outright",
+      parse_prompt(FOLLOWUP) is None)
+
+# The subject is presentation. Letting it into the press-time guard would mean a
+# cosmetic redraw of the context line could veto a still-valid answer.
+_a = Prompt(options=((1, "Yes"), (2, "No")), subject="Fetch one")
+_b = Prompt(options=((1, "Yes"), (2, "No")), subject="Fetch two")
+check("two prompts differing ONLY in subject have identical options",
+      _a.options == _b.options)
 
 check("no menu on screen -> no answer keys at all",
       answer_keys(FakeDash(None)) is None)
@@ -217,7 +255,7 @@ four = Prompt(options=((1, "Left"), (2, "Right"), (3, "type something"),
 bar4 = answer_keys(FakeDash(four))
 check("a four-option menu takes all four keys", sorted(bar4) == [4, 5, 6, 7])
 check("…displacing Firefox", bar4[7].render().label != "Firefox")
-check("…and key7 is the fourth option", bar4[7].render().sub.startswith("4 ·"),
+check("…and key7 is the fourth option", bar4[7].render().sub == "sends 4",
       bar4[7].render().sub)
 check("…with no Esc key (keyboard Esc still works)",
       not any(c.render().label == "Esc" for c in bar4.values()))

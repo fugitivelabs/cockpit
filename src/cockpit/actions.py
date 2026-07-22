@@ -19,16 +19,27 @@ import logging
 from typing import Optional
 
 from deck import Slot
+from deck.color import over
 
+from . import palette
 from .dashboard import ACTION_KEYS, ActionKey, Dashboard
 from .osint import activate, keystroke
 
 log = logging.getLogger("deck.cockpit.actions")
 
-# Muted, so the action bar reads as a different kind of thing than the session
-# board above it — the board is the information, this is the furniture.
-ACTION_BG = "#101820"
-ACTION_ACCENT = "#4A6B7C"
+# The action bar is furniture, and it looks like furniture: no state rule, no
+# hue, value centred over a small-caps caption. That structural difference is
+# what tells you at a glance which row is information and which row is controls
+# — the board above it is the only place colour means anything.
+ACTION_BG = palette.FURNITURE
+ACTION_ACCENT = None
+
+
+def _furniture(label: str, sub: str, key: str, bar=None, bar_color=None) -> Slot:
+    """An action-bar key. One shape, so the whole bar reads as one object."""
+    return Slot(label=label, sub=sub, caps=True, align="center",
+                bg=ACTION_BG, fg=palette.INK, sub_fg=palette.INK_DIM,
+                bar=bar, bar_color=bar_color or palette.METER, key=key)
 
 
 def jump_to_app(name: str, bundle_id: str, label: Optional[str] = None) -> ActionKey:
@@ -37,8 +48,7 @@ def jump_to_app(name: str, bundle_id: str, label: Optional[str] = None) -> Actio
     Uses LaunchServices (`open -b`) via osint.activate, so it needs no
     Automation permission and works whether or not the app is already running.
     """
-    slot = Slot(label=label or name, sub="app", bg=ACTION_BG, fg="#FFFFFF",
-                accent=ACTION_ACCENT, key=f"app:{bundle_id}")
+    slot = _furniture(label or name, "app", f"app:{bundle_id}")
 
     def run(long: bool) -> None:
         if not activate(bundle_id):
@@ -62,9 +72,8 @@ def jump_to_top(dashboard: Dashboard) -> ActionKey:
     def slot() -> Slot:
         top = dashboard.top_session()
         if top is None:
-            return Slot(label="top", sub="—", bg=ACTION_BG, key="top:none")
-        return Slot(label="top", sub=top.cwd, bg=ACTION_BG, fg="#FFFFFF",
-                    accent=ACTION_ACCENT, key=f"top:{top.id}")
+            return _furniture("—", "top", "top:none")
+        return _furniture(top.cwd, "top", f"top:{top.id}")
 
     def run(long: bool) -> None:
         top = dashboard.top_session()
@@ -85,8 +94,7 @@ def refresh(dashboard: Dashboard) -> ActionKey:
     def slot() -> Slot:
         age = dashboard.poller.age()
         sub = "—" if age is None else f"{int(age)}s ago"
-        return Slot(label="refresh", sub=sub, bg=ACTION_BG, fg="#FFFFFF",
-                    accent=ACTION_ACCENT, key="refresh")
+        return _furniture(sub, "refresh", f"refresh:{sub}")
 
     return ActionKey(slot, lambda long: dashboard.poller.poll_once(),
                      name="refresh")
@@ -105,9 +113,8 @@ def brightness(surface) -> ActionKey:
     """
     def slot() -> Slot:
         level = surface.brightness
-        return Slot(label="light", sub=f"{level}%", bg=ACTION_BG, fg="#FFFFFF",
-                    accent=ACTION_ACCENT, bar=level / 100.0,
-                    bar_color="#E8B923", key=f"bright:{level}")
+        return _furniture(f"{level}%", "light", f"bright:{level}",
+                          bar=level / 100.0, bar_color=palette.METER)
 
     def run(long: bool) -> None:
         if long:
@@ -149,28 +156,26 @@ def session_info(dashboard: Dashboard) -> dict:
 
     def model_slot() -> Slot:
         s = focused()
-        return Slot(label=_short_model(s.model if s else ""), sub="model",
-                    bg=ACTION_BG, fg="#FFFFFF", accent=ACTION_ACCENT, key="info:model")
+        return _furniture(_short_model(s.model if s else ""), "model", "info:model")
 
     def context_slot() -> Slot:
         s = focused()
         pct = s.telemetry.context_pct if (s and s.telemetry) else None
         if pct is None:
-            return Slot(label="—", sub="context", bg=ACTION_BG, key="info:ctx")
-        # Amber past 80%: the one number here that is ever urgent.
-        return Slot(label=f"{int(pct)}%", sub="context", bg=ACTION_BG, fg="#FFFFFF",
-                    accent=ACTION_ACCENT, bar=pct / 100.0,
-                    bar_color="#E8B923" if pct >= 80 else "#3FA7D6",
-                    key=f"info:ctx:{int(pct)}")
+            return _furniture("—", "context", "info:ctx")
+        # Amber past 80% — "approaching a limit" is what caution means, the one
+        # cross-cutting reuse of a state hue the palette allows.
+        return _furniture(f"{int(pct)}%", "context", f"info:ctx:{int(pct)}",
+                          bar=pct / 100.0,
+                          bar_color=palette.meter_color(pct / 100.0))
 
     def cost_slot() -> Slot:
         s = focused()
         usd = s.telemetry.cost_usd if (s and s.telemetry) else None
         if usd is None:
-            return Slot(label="—", sub="cost", bg=ACTION_BG, key="info:cost")
+            return _furniture("—", "cost", "info:cost")
         text = f"${usd:,.0f}" if usd >= 100 else f"${usd:.2f}"
-        return Slot(label=text, sub="cost", bg=ACTION_BG, fg="#FFFFFF",
-                    accent=ACTION_ACCENT, key=f"info:cost:{text}")
+        return _furniture(text, "cost", f"info:cost:{text}")
 
     keys = list(ACTION_KEYS)
     return {
@@ -180,19 +185,25 @@ def session_info(dashboard: Dashboard) -> dict:
     }
 
 
-# Answer keys, styled apart from the muted info bar — these are the only keys
-# on the deck that change another program's state.
-ANSWER_YES = ("#0E2A16", "#4CD964")
-ANSWER_NO = ("#3A0A0A", "#FF6B6B")
-ANSWER_OTHER = ("#2A2000", "#E8B923")
+# Answer keys — the only keys on the deck that change another program's state,
+# and the only place green appears.
+#
+# Green for "Yes" is the most over-learned mapping in computing and it stays.
+# Red for "No" does not: red is reserved for "a session needs you" (palette.py),
+# and declining a permission prompt is always the safe move, so alarm-colouring
+# it would both misspend the deck's scarcest signal and push you toward
+# approving. Decline is a bright neutral instead — easy to find, not an alarm.
+ANSWER_YES = palette.ANSWER_AFFIRM
+ANSWER_NO = palette.ANSWER_DECLINE
+ANSWER_OTHER = palette.ANSWER_GRANT
 
 
-def _answer_style(label: str):
+def _answer_style(label: str) -> str:
     """Colour by what the option *says*, since that's all we can trust.
 
-    A plain "Yes" is green and a "No" is red, but anything of the
+    A plain "Yes" is green and a "No" is neutral, but anything of the
     "Yes, and don't ask again…" family is amber — it is an approval that also
-    widens permissions, and it should not look like the safe one. This is
+    widens permissions, and it must not look like the safe one. This is
     presentation only; the label on the key is always the screen's own text.
     """
     low = label.lower()
@@ -255,11 +266,25 @@ def answer_keys(dashboard: Dashboard, reader=None) -> Optional[dict]:
 
 def _answer_key(dashboard: Dashboard, digit, label: str, prompt) -> ActionKey:
     """One option as a key. `digit` of None means send Escape instead."""
-    bg, accent = (ACTION_BG, ACTION_ACCENT) if digit is None else _answer_style(label)
+    color = palette.ANSWER_CANCEL if digit is None else _answer_style(label)
     short = label if len(label) <= 22 else label[:21] + "…"
+    # Flooded like the board, but structurally unmistakable against it: centred
+    # rather than left-aligned, one big word rather than project-over-task, and
+    # ringed by a dark perimeter that nothing else on the deck has. Role has to
+    # be legible without reading and without depending on hue — these are the
+    # only keys that type into a live session.
+    #
+    # The caption says which key gets sent, not the option text again — the
+    # label already carries that, and repeating it truncated ("2 · Yes, and d…")
+    # spends the one line that could tell you what pressing actually does.
     slot = Slot(label=short.split(",")[0][:14],
-                sub=("cancel" if digit is None else f"{digit} · {short}")[:24],
-                bg=bg, fg="#FFFFFF", accent=accent,
+                sub="cancel" if digit is None else f"sends {digit}",
+                caps=True, align="center",
+                bg=color,
+                fg=palette.ANSWER_INK,
+                sub_fg=palette.ANSWER_INK_DIM,
+                frame=over("#000000", 0.55, color),
+                frame_w=palette.ANSWER_FRAME_W,
                 key=f"ans:{digit}:{label[:12]}")
 
     def run(long: bool) -> None:

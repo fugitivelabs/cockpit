@@ -74,6 +74,15 @@ class Prompt:
 
     options: tuple
     selected: Optional[int] = None
+    # What the menu is *about*, lifted verbatim from the line Claude Code prints
+    # above it ("Fetch https://example.com", "Create ~/.claude/probe.txt"). Empty
+    # when the screen didn't offer one — it is presentation only.
+    #
+    # **Deliberately excluded from the press-time guard.** `_answer_key` compares
+    # `options` and nothing else, because that is the part whose meaning a
+    # keystroke depends on. Including this would let a cosmetic redraw of the
+    # context line veto an answer that is still perfectly valid.
+    subject: str = ""
 
     def digits(self) -> tuple:
         return tuple(d for d, _ in self.options)
@@ -81,6 +90,10 @@ class Prompt:
 
 # "❯ 1. Yes" / "  2. No, and tell Claude what to do differently"
 _OPTION = re.compile(r"^\s*(❯)?\s*(\d)\.\s+(\S.*?)\s*$")
+# The line Claude Code prints to announce what it is about to do. This is the
+# genuinely informative text on the screen — "Fetch https://example.com" tells
+# you what you are approving; "Do you want to proceed?" does not.
+_SUBJECT = re.compile(r"^\s*⏺\s*(\S.*?)\s*$")
 # The footer Claude Code renders under an interactive menu. Requiring it is the
 # difference between "a menu is open" and "the scrollback happens to contain a
 # numbered list" — transcripts are full of numbered lists.
@@ -135,14 +148,29 @@ def parse_prompt(text: str) -> Optional[Prompt]:
         return None
 
     options, selected = [], None
-    for line in lines[:footer_at]:
+    first_option_at = None
+    for i, line in enumerate(lines[:footer_at]):
         m = _OPTION.match(line)
         if not m:
             continue
+        if first_option_at is None:
+            first_option_at = i
         marker, digit, label = m.group(1), int(m.group(2)), m.group(3)
         options.append((digit, label))
         if marker:
             selected = digit
+
+    # The subject is read from *above* the first option, nearest-first, so a
+    # menu that follows several announcements picks up the one it belongs to.
+    # Purely additive: it can only ever be "" and never changes whether a menu
+    # is recognised, which keeps the safety rules above untouched.
+    subject = ""
+    for line in reversed(lines[:first_option_at if first_option_at is not None
+                               else footer_at]):
+        m = _SUBJECT.match(line)
+        if m:
+            subject = m.group(1)
+            break
 
     if len(options) < 2:
         return None
@@ -151,7 +179,8 @@ def parse_prompt(text: str) -> Optional[Prompt]:
     if [d for d, _ in options] != list(range(1, len(options) + 1)):
         log.debug("discarding non-consecutive options: %s", options)
         return None
-    return Prompt(options=tuple(options), selected=selected)
+    return Prompt(options=tuple(options), selected=selected,
+                  subject=subject)
 
 
 # --- the impure half: getting the text ----------------------------------------

@@ -20,11 +20,15 @@ sys.path.insert(0, os.path.join(
 
 from deck import BLANK, Slot
 
+from deck.anim import STEPS
+from deck.color import luminance, parse
+from cockpit import palette
 from cockpit import actions as actions_mod
 from cockpit.attention import AttentionTracker
 from cockpit.actions import default_bar
 from cockpit.claude_code import parse_listing, parse_title
 from cockpit.dashboard import (
+    BREATHE_LO,
     EMPTY,
     STYLE,
     ActionKey,
@@ -216,27 +220,26 @@ print("\n[label_sessions] cwd where unique, task where it collides")
 labels = label_sessions(found)
 by_handle = {x.handle: labels[x.id] for x in found}
 check("unique cwd keeps its name",
-      by_handle["50245"] == ("peregrine", "Implement Peregrine model IR with "
-                             "concrete type definitions"),
-      str(by_handle["50245"]))
+      by_handle["50245"][0] == "peregrine", str(by_handle["50245"]))
+check("…with the task head as its subtitle",
+      by_handle["50245"][1] == "Peregrine model", str(by_handle["50245"]))
 check("unique cwd: docland", by_handle["6299"][0] == "docland")
-check("collided cwd switches to the task head",
-      by_handle["35112"] == ("corpus migration", "Projects"),
-      str(by_handle["35112"]))
-check("…and the second collision", by_handle["111"] == ("Personal OS", "Projects"),
+check("a collided cwd STILL leads with the project name",
+      by_handle["35112"][0] == "Projects" and by_handle["111"][0] == "Projects",
+      str([by_handle["35112"], by_handle["111"]]))
+check("…the task head moves to the subtitle instead",
+      by_handle["35112"][1] == "corpus migration", str(by_handle["35112"]))
+check("…and the second collision", by_handle["111"][1] == "Personal OS",
       str(by_handle["111"]))
-check("…and the third", by_handle["49378"][1] == "Projects"
-      and by_handle["49378"][0] not in ("Projects", ""),
-      str(by_handle["49378"]))
-check("all three `Projects` tiles now read differently",
-      len({by_handle[h][0] for h in ("35112", "111", "49378")}) == 3,
-      str([by_handle[h][0] for h in ("35112", "111", "49378")]))
-check("cwd stays in the subtitle so you still know where it lives",
-      all(by_handle[h][1] == "Projects" for h in ("35112", "111", "49378")))
+check("all three `Projects` tiles still read differently",
+      len({by_handle[h][1] for h in ("35112", "111", "49378")}) == 3,
+      str([by_handle[h][1] for h in ("35112", "111", "49378")]))
+check("the big line NEVER inverts — it is a project name on every tile",
+      all(labels[x.id][0] == x.cwd for x in found))
 
 collide_no_task = label_sessions([mk("claude:1", "Projects", ""),
                                   mk("claude:2", "Projects", "")])
-check("a collision with no task text falls back to the cwd",
+check("a collision with no task text still names the project",
       collide_no_task["claude:1"] == ("Projects", ""),
       str(collide_no_task["claude:1"]))
 
@@ -255,16 +258,74 @@ tile = SessionTile(mk("claude:1", "peregrine", "do a thing", "working"),
                    "peregrine", "do a thing", focused.append)
 slot = tile.render()
 check("renders label and sub", slot.label == "peregrine" and slot.sub == "do a thing")
-check("state drives the color", (slot.bg, slot.accent) == STYLE["working"])
-check("working carries a badge", slot.badge == "●")
-check("slot identity is the session, not the key position", slot.key == "claude:1")
+check("state floods the whole tile", slot.bg == STYLE["working"][0])
+check("working is blue, never green — green belongs to the answer bar",
+      STYLE["working"][1] == palette.ADVISORY)
+check("a calm state carries no badge", slot.badge == "")
+check("a calm tile spends its caption on the task, not the state",
+      slot.sub == "do a thing", slot.sub)
+check("a calm state does not animate", tile.animating() is False)
+check("slot identity leads with the session, not the key position",
+      slot.key.startswith("claude:1"))
 check("press hands the session to the callback",
       tile.on_press(False) is True and focused and focused[0].id == "claude:1")
 
 blocked_slot = SessionTile(mk("claude:2", "x", "y", "blocked"), "x", "y",
                            focused.append).render()
-check("blocked is visually distinct from working",
-      blocked_slot.bg != slot.bg and blocked_slot.accent != slot.accent)
+check("blocked is visually distinct from working", blocked_slot.bg != slot.bg)
+check("blocked is the warning hue", STYLE["blocked"][1] == palette.WARNING)
+# Temperature, not luminance: red is inherently low-luminance, so a vivid red
+# scores at or below a mid blue and the obvious assertion fails for the wrong
+# reason. Warm-vs-cool is the property the board actually trades on.
+_r, _g, _b = parse(blocked_slot.bg)
+_wr, _wg, _wb = parse(slot.bg)
+check("…and is the warm one, where working is cool",
+      (_r - _b) > 0 > (_wr - _wb), f"blocked {_r - _b}, working {_wr - _wb}")
+check("…and carries a badge rather than spending the caption on its state",
+      blocked_slot.badge == "!" and blocked_slot.sub == "y",
+      f"badge={blocked_slot.badge!r} sub={blocked_slot.sub!r}")
+# Motion is opt-in per state, NOT implied by needs-you. blocked is the loudest
+# thing on the deck and deliberately does not move (Grant, on living with it);
+# waiting is the quieter warm state and still breathes.
+_blocked = SessionTile(mk("claude:2", "x", "y", "blocked"), "x", "y", focused.append)
+check("blocked does NOT animate — loud and still beats loud and moving",
+      _blocked.animating() is False)
+check("…so its field sits at full brightness", _blocked.render().pulse == 1.0)
+_waiting = SessionTile(mk("claude:3", "x", "y", "waiting"), "x", "y", focused.append)
+check("waiting still breathes", _waiting.animating() is True)
+# Sampled over time, not once: a breathe legitimately passes through 1.0 at the
+# top of its cycle, so a single render can catch it at full brightness. The
+# property that matters is that the value MOVES.
+_seen = set()
+_t0 = time.monotonic()
+while time.monotonic() - _t0 < 1.2:
+    _seen.add(_waiting.render().pulse)
+    time.sleep(0.01)
+check("…which shows up as a field brightness that varies over time",
+      len(_seen) > 1, f"{len(_seen)} distinct in 1.2s")
+# One quantization step of slack: values are snapped onto STEPS buckets, and
+# the bucket nearest the floor can land just under it.
+_tol = 1.0 / (STEPS - 1)
+check("…within the configured floor and ceiling",
+      all(BREATHE_LO - _tol <= v <= 1.0 + 1e-9 for v in _seen),
+      f"{min(_seen):.3f}..{max(_seen):.3f} (floor {BREATHE_LO})")
+check("the pulse capability is intact, just switched off for blocked",
+      palette.STATE["waiting"].breathes and not palette.STATE["blocked"].breathes)
+check("cool states never move",
+      not any(palette.STATE[n].breathes or palette.STATE[n].flashes
+              for n in ("working", "idle")))
+
+# The collision that started the redesign: no hue may mean two things.
+_hues = {name: st.color for name, st in palette.STATE.items()}
+check("every state hue is distinct", len(set(_hues.values())) == len(_hues))
+check("no session state uses the answer bar's green",
+      palette.GO not in _hues.values())
+check("no answer colour reuses the warning red",
+      palette.WARNING not in (palette.ANSWER_AFFIRM, palette.ANSWER_GRANT,
+                              palette.ANSWER_DECLINE))
+check("warm states are exactly the needs-you states",
+      {n for n, st in palette.STATE.items() if st.needs_you}
+      == {"blocked", "waiting"})
 
 
 print("\n[Dashboard] with a fake adapter — no osascript, no device")
@@ -306,7 +367,13 @@ check("session region holds 4 keys", len(d.view.components()) == 4,
 check("sessions occupy the top row only", set(d.view.components()) == {0, 1, 2, 3})
 check("seven sessions need two pages", d.pages == 2, f"pages={d.pages}")
 check("info bar names the count", d.info()[0] == "7 sessions", d.info()[0])
-check("info bar breaks down by state", "1 working" in d.info()[1], d.info()[1])
+check("info bar tallies state as coloured chips, not prose",
+      (palette.ADVISORY, 1) in d.info()[4], str(d.info()[4]))
+check("…and the headline is a plain count, never a red banner",
+      d.info()[0].endswith("session") or d.info()[0].endswith("sessions"),
+      d.info()[0])
+check("…with no alarm colour on it",
+      d.info()[3] != palette.WARNING, d.info()[3])
 
 check("refresh is a no-op when nothing changed", d.refresh() is False)
 fake.set(parse_listing(LIVE)[:3])
@@ -342,7 +409,7 @@ check("overflow pages over the session region, not the grid",
 check("a page shows at most 4 tiles", len(d.view.components()) == 4)
 d.view.on_touch("right")
 check("touch pages forward", d.view.page == 1)
-check("page shows in the info bar", "pg 2/5" in d.info()[1], d.info()[1])
+check("page shows in the info bar", d.info()[5] == (1, 5), str(d.info()[5]))
 
 print("\n[Dashboard] press routing")
 
@@ -513,8 +580,8 @@ mounted = default_bar(d, surf)()
 check("default bar fills exactly the action keys", set(mounted) == {4, 5, 6, 7})
 
 top_key = actions_mod.jump_to_top(d)
-check("top key names its target", top_key.render().sub == d.top_session().cwd,
-      top_key.render().sub)
+check("top key names its target", top_key.render().label == d.top_session().cwd,
+      top_key.render().label)
 fake.focus_calls.clear()
 top_key.on_press(False)
 for _ in range(200):
@@ -528,14 +595,14 @@ fake.set([])
 d.poller.poll_once()
 d.refresh()
 check("top key dims when there are no sessions", top_key.enabled() is False)
-check("…and shows an em dash", top_key.render().sub == "—")
+check("…and shows an em dash", top_key.render().label == "—")
 fake.focus_calls.clear()
 top_key.on_press(False)
 time.sleep(0.05)
 check("…and pressing it does nothing", fake.focus_calls == [])
 
 b = actions_mod.brightness(surf)
-check("brightness key shows the level", b.render().sub == "70%", b.render().sub)
+check("brightness key shows the level", b.render().label == "70%", b.render().label)
 b.on_press(False)
 time.sleep(0.05)
 check("press steps down the cycle", surf.brightness == 30, str(surf.brightness))
@@ -581,9 +648,9 @@ class FocusAdapter(FakeAdapter):
         return self.focused_handle
 
 
-from cockpit.dashboard import lighten
+from deck.color import lighten
 
-check("lighten moves toward white", lighten("#000000", 0.5) == "#7F7F7F",
+check("lighten moves toward white", lighten("#000000", 0.5) == "#808080",
       lighten("#000000", 0.5))
 check("lighten preserves hue direction",
       lighten("#0E2A16") != "#0E2A16" and lighten("#0E2A16").startswith("#5"))
@@ -597,11 +664,18 @@ tiles = {c.session.handle: c for c in fdd.view.components().values()
          if hasattr(c, "session")}
 check("the focused tile is marked", tiles["10"].focused is True)
 check("…and only that one", tiles["20"].focused is False)
-check("focused tile renders lighter than its state colour",
-      tiles["10"].render().bg != tiles["20"].render().bg,
+check("focus is a white bar, and only the focused tile has one",
+      tiles["10"].render().foot == palette.FOCUS
+      and tiles["20"].render().foot is None)
+check("…thick enough to read as a block, not a line",
+      tiles["10"].render().foot_h >= 12, tiles["10"].render().foot_h)
+check("…anchored to the BOTTOM, so it cannot displace the project name",
+      tiles["10"].render().rule is None and tiles["10"].render().frame is None)
+check("focus does NOT tint the field — that would desaturate the state",
+      tiles["10"].render().bg == tiles["20"].render().bg,
       f'{tiles["10"].render().bg} vs {tiles["20"].render().bg}')
 check("focus is part of slot identity, so it repaints",
-      tiles["10"].render().key.endswith(":focus"))
+      ":focus" in tiles["10"].render().key)
 
 ff.focused_handle = "20"
 fdd.poller.poll_once()
@@ -641,7 +715,7 @@ check("key4 shows the model, shortened",
       bar[4].render().label == "Opus 4.8", bar[4].render().label)
 check("key5 shows context percent", bar[5].render().label == "96%")
 check("…as a bar", bar[5].render().bar == 0.96)
-check("…amber past 80%", bar[5].render().bar_color == "#E8B923")
+check("…amber past 80%", bar[5].render().bar_color == palette.CAUTION)
 check("key6 shows cost", bar[6].render().label == "$38.83", bar[6].render().label)
 check("key7 is always Firefox", bar[7].render().label == "Firefox")
 check("info keys are inert — they describe, they don't act",

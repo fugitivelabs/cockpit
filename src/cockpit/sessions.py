@@ -204,24 +204,28 @@ def task_phrase(task: str, max_chars: int = 16) -> str:
 
 
 def label_sessions(sessions) -> dict[str, tuple[str, str]]:
-    """{session id: (label, sub)} — cwd where it's unique, task where it isn't.
+    """{session id: (label, sub)} — **the cwd is always the label.**
 
-    When a cwd collides, the task head becomes the label and the cwd drops to
-    the subtitle, so the tile still tells you where it lives. A colliding
-    session with no task text keeps the cwd (a duplicate label beats a blank
-    one) — better an ambiguous tile than an anonymous one.
+    Amended 2026-07-22 (Grant's call, on seeing it): the earlier rule promoted
+    the task head to the label whenever a cwd collided and demoted the cwd to
+    the subtitle. That disambiguated, but it made the board structurally
+    inconsistent — `peregrine` showed project-over-task while a colliding
+    `Projects` session showed task-over-project, so the big line meant a
+    different *kind* of thing from one tile to the next and the eye had no
+    stable place to land.
+
+    The fix keeps the disambiguation and drops the inversion: the project name
+    is always the big line, and the distinguishing task head always goes in the
+    subtitle. Three `Projects` tiles still read differently, because the second
+    line is what tells them apart — it just no longer costs the first line.
+
+    The subtitle prefers `task_phrase` over the raw task everywhere, not only on
+    collisions: it is the distinctive head of the string, so it survives
+    truncation at 96 px far better than "Implement the thing that…".
     """
-    counts: dict[str, int] = {}
-    for s in sessions:
-        counts[s.cwd] = counts.get(s.cwd, 0) + 1
-
     out: dict[str, tuple[str, str]] = {}
     for s in sessions:
-        if counts.get(s.cwd, 0) > 1:
-            phrase = task_phrase(s.task)
-            out[s.id] = (phrase, s.cwd) if phrase else (s.cwd, s.task)
-        else:
-            out[s.id] = (s.cwd, s.task)
+        out[s.id] = (s.cwd, task_phrase(s.task) or s.task)
     return out
 
 
