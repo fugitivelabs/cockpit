@@ -221,12 +221,8 @@ class ClaudeProcessAdapter:
             return False
         return True
 
-    def focused(self, sessions) -> Optional[str]:
-        """The handle (tty) of the session you are looking at, or None."""
-        from ..macos.osint import frontmost
-        front = frontmost()
-        if front is None or front.bundle_id != TERMINAL_BUNDLE:
-            return None
+    def _front_window_id(self) -> Optional[str]:
+        """Terminal's frontmost window id, read NOW. The press-time truth."""
         try:
             r = subprocess.run(
                 ["osascript", "-e",
@@ -235,9 +231,70 @@ class ClaudeProcessAdapter:
         except (subprocess.SubprocessError, OSError):
             return None
         wid = r.stdout.strip()
-        if r.returncode != 0 or not wid.isdigit():
+        return wid if (r.returncode == 0 and wid.isdigit()) else None
+
+    def focused(self, sessions) -> Optional[str]:
+        """The handle (tty) of the session you are looking at, or None."""
+        from ..macos.osint import frontmost
+        front = frontmost()
+        if front is None or front.bundle_id != TERMINAL_BUNDLE:
+            return None
+        wid = self._front_window_id()
+        if wid is None:
             return None
         for tty, w in self._tty_windows().items():
             if w == wid:
                 return tty if any(s.handle == tty for s in sessions) else None
         return None
+
+    # --- reading the screen -------------------------------------------------
+    #
+    # Parity with adapter #1, and the reason it matters: without these the board
+    # offers no answer keys, which makes this adapter strictly worse at the one
+    # thing Stage 3 exists to do, however much better it is at discovery.
+    #
+    # The guard is the same one, expressed in this adapter's identity. Adapter
+    # #1 proves "is this session's window in front" by comparing a window id to
+    # its handle. Here the handle is a tty, so the proof is one hop longer —
+    # tty -> window, then window == front — and **both halves are read fresh**.
+    # A cached mapping would reintroduce exactly the bug that made every answer
+    # key refuse: state that is a moment stale is indistinguishable from state
+    # that is wrong, and acting on the wrong window is the one genuinely
+    # dangerous failure in this project.
+
+    def _is_front(self, session: Session) -> Optional[int]:
+        """The frontmost app's pid if `session` owns the front window, else None.
+
+        None means "could not prove it", which every caller must treat as no.
+        """
+        from ..macos.osint import frontmost
+        front = frontmost()
+        if front is None or front.bundle_id != TERMINAL_BUNDLE:
+            return None
+        wid = self._front_window_id()
+        if wid is None:
+            return None
+        # Fresh tty->window, not the poll's copy: a tab dragged to another
+        # window between poll and press would otherwise resolve to the old one.
+        if self._tty_windows().get(session.handle) != wid:
+            return None
+        return front.pid
+
+    def prompt_ui_present(self, session: Session) -> Optional[bool]:
+        """Is a prompt UI on that session's screen? None if unreadable."""
+        pid = self._is_front(session)
+        if pid is None:
+            return None
+        from ..macos.axread import prompt_ui_present as _present, visible_text
+        text = visible_text(pid)
+        if text is None:
+            return None
+        return _present(text)
+
+    def read_prompt(self, session: Session):
+        """The menu on screen in that session's window, or None."""
+        pid = self._is_front(session)
+        if pid is None:
+            return None
+        from ..macos.axread import read_prompt as _read
+        return _read(pid)

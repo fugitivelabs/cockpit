@@ -348,5 +348,65 @@ check("last_prompt is the fallback when there is no ai-title",
 check("no processes means no sessions", build_sessions([], {}, {}) == [])
 
 
+print("\n[_is_front] the press-time guard — every refusal matters more than the pass")
+
+import fleet.macos.osint as osint_mod                                # noqa: E402
+from fleet.adapters.claude_process import ClaudeProcessAdapter       # noqa: E402
+from fleet.macos.osint import Focus                                  # noqa: E402
+from fleet.sessions import Session                                   # noqa: E402
+
+TERM = Focus(app="Terminal", bundle_id="com.apple.Terminal", pid=42,
+             window_title="")
+FIREFOX = Focus(app="Firefox", bundle_id="org.mozilla.firefox", pid=99,
+                window_title="")
+
+sess = Session(id="claude:pid:1", agent="claude", cwd="cockpit", task="t",
+               state="idle", handle="/dev/ttys000")
+
+_real_frontmost = osint_mod.frontmost
+try:
+    def adapter(front_wid, windows):
+        a = ClaudeProcessAdapter()
+        a._front_window_id = lambda: front_wid
+        a._tty_windows = lambda: windows
+        return a
+
+    osint_mod.frontmost = lambda: TERM
+    check("the session owning the front window proves out",
+          adapter("54593", {"/dev/ttys000": "54593"})._is_front(sess) == 42,
+          "returns the frontmost app pid to read from")
+
+    check("a DIFFERENT window in front refuses",
+          adapter("49378", {"/dev/ttys000": "54593"})._is_front(sess) is None,
+          "the session is open but you are not looking at it")
+
+    check("a tty with no window at all refuses",
+          adapter("54593", {})._is_front(sess) is None)
+
+    check("an unreadable front window id refuses",
+          adapter(None, {"/dev/ttys000": "54593"})._is_front(sess) is None,
+          "could not prove it is not the same as proved it")
+
+    osint_mod.frontmost = lambda: FIREFOX
+    check("another app in front refuses",
+          adapter("54593", {"/dev/ttys000": "54593"})._is_front(sess) is None,
+          "a front Terminal window means nothing while you are in Firefox")
+
+    osint_mod.frontmost = lambda: None
+    check("no readable frontmost app refuses",
+          adapter("54593", {"/dev/ttys000": "54593"})._is_front(sess) is None,
+          "a denied TCC grant must not read as permission")
+
+    osint_mod.frontmost = lambda: TERM
+    a = adapter("49378", {"/dev/ttys000": "54593"})
+    check("read_prompt refuses when the guard refuses",
+          a.read_prompt(sess) is None)
+    check("prompt_ui_present refuses when the guard refuses",
+          a.prompt_ui_present(sess) is None,
+          "None means change nothing, never 'no prompt'")
+finally:
+    osint_mod.frontmost = _real_frontmost
+
+
 print(f"\n=== {ok} passed, {fail} failed ===")
 sys.exit(1 if fail else 0)
