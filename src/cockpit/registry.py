@@ -203,20 +203,34 @@ class Registry:
             if cwd:
                 rec.cwd = cwd
             rec.updated_at = self._clock()
+            new_tool = tool.lower()
             if flag is None:
                 if (scope == "tool" and rec.flag is not None and rec.flag_tool
-                        and tool.lower() != rec.flag_tool):
+                        and new_tool != rec.flag_tool):
                     log.debug("session %s keeps %s: %s finished, not %s",
                               session_id, rec.flag, tool, rec.flag_tool)
                     return
                 rec.flag, rec.flag_at, rec.flag_tool = None, 0.0, ""
-            elif _rank(flag) >= _rank(rec.flag):
-                rec.flag = flag
-                rec.flag_at = self._clock()
-                rec.flag_tool = tool.lower()
             else:
-                log.debug("session %s keeps %s over %s", session_id, rec.flag, flag)
-                return
+                # A flag naming a DIFFERENT tool than the one on record is a new
+                # prompt, not an update to the old one, so it replaces outright
+                # rather than rank-competing. This is what lets an AskUserQuestion
+                # (remapped to `waiting`) override a `blocked` left standing by the
+                # Bash prompt one event earlier — the exact case where a question
+                # showed red. A NAMED tool is required: the bare Notification that
+                # accompanies every approval carries no tool, stays subordinate to
+                # ranking, and so still cannot downgrade a real block (the reason
+                # the ranking exists at all).
+                new_prompt = (new_tool and rec.flag is not None
+                              and new_tool != rec.flag_tool)
+                if rec.flag is None or new_prompt or _rank(flag) >= _rank(rec.flag):
+                    rec.flag = flag
+                    rec.flag_at = self._clock()
+                    rec.flag_tool = new_tool
+                else:
+                    log.debug("session %s keeps %s over %s (same/ambiguous prompt)",
+                              session_id, rec.flag, flag)
+                    return
             changed = rec.flag != before
         # Only a real transition earns a line, so a quiet board stays quiet in
         # the log and the events that matter stay findable.
