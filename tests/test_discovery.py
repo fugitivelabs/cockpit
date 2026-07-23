@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
 from fleet import transcript
+from fleet.adapters.claude_process import build_sessions, parse_tty_windows
 from fleet.procscan import (
     Proc,
     attach_cwds,
@@ -263,6 +264,88 @@ try:
           transcript.transcripts_for("/nowhere", root=root) == [])
 finally:
     shutil.rmtree(tmp, ignore_errors=True)
+
+
+print("\n[parse_tty_windows] tty -> window, for navigation")
+
+check("maps tty to window id",
+      parse_tty_windows("54593\t/dev/ttys000\n49378\t/dev/ttys002\n")
+      == {"/dev/ttys000": "54593", "/dev/ttys002": "49378"})
+check("a window mid-close (no tty) is skipped, not mapped to ''",
+      parse_tty_windows("54593\t\n49378\t/dev/ttys002\n")
+      == {"/dev/ttys002": "49378"},
+      "otherwise every such window collides onto one key")
+check("a non-numeric window id is skipped",
+      parse_tty_windows("notanid\t/dev/ttys002\n") == {})
+check("empty input is survivable", parse_tty_windows("") == {})
+
+
+print("\n[build_sessions] composing process + registry + transcript")
+
+
+class FakeRec:
+    def __init__(self, session_id=None, flag=None, telemetry=None, model=""):
+        self.session_id = session_id
+        self.flag = flag
+        self.telemetry = telemetry
+        self.model = model
+
+
+class FakeMeta:
+    def __init__(self, state="idle", ai_title=None, last_prompt=None):
+        self.state = state
+        self.ai_title = ai_title
+        self.last_prompt = last_prompt
+
+
+p1 = Proc(74869, 1, "/dev/ttys000", "claude",
+          "/Users/g/Documents/Projects/cockpit/.claude/worktrees/session-library")
+p2 = Proc(18909, 1, "/dev/ttys001", "claude", "/Users/g/Documents/Projects/docland")
+
+built = build_sessions(
+    [p1, p2],
+    {"/dev/ttys000": FakeRec("sid-a", None, None, "Opus 4.8")},
+    {"/dev/ttys000": FakeMeta("working", ai_title="Evaluate the abstraction")},
+)
+a, b = built
+
+check("the id is keyed on pid", a.id == "claude:pid:74869",
+      "available on the first poll, unlike session_id")
+check("the handle is the tty", a.handle == "/dev/ttys000",
+      "terminal-agnostic identity; resolved to a window at press time")
+check("cwd is shortened to the basename for the label",
+      a.cwd == "session-library")
+check("the task comes from the transcript title",
+      a.task == "Evaluate the abstraction")
+check("the session id comes from the registry", a.session_id == "sid-a")
+check("…and the model too", a.model == "Opus 4.8")
+check("state comes from the transcript", a.state == "working")
+
+check("a session with no registry record still appears", b.cwd == "docland")
+check("…with no session id", b.session_id is None)
+check("…and no model", b.model is None)
+check("…and no transcript means idle, never invented activity",
+      b.state == "idle")
+check("…and an empty task rather than a crash", b.task == "")
+check("nothing parses a title any more", a.title is None and b.title is None)
+
+fused = build_sessions(
+    [p1], {"/dev/ttys000": FakeRec("sid-a", "blocked")},
+    {"/dev/ttys000": FakeMeta("idle")})
+check("a hook flag raises a quiet session", fused[0].state == "blocked")
+
+fused = build_sessions(
+    [p1], {"/dev/ttys000": FakeRec("sid-a", "blocked")},
+    {"/dev/ttys000": FakeMeta("working")})
+check("…but a running turn beats a stale flag", fused[0].state == "working",
+      "fuse_state: polled truth wins, same as adapter #1")
+
+titled = build_sessions([p1], {}, {"/dev/ttys000": FakeMeta("idle",
+                                   last_prompt="do the thing")})
+check("last_prompt is the fallback when there is no ai-title",
+      titled[0].task == "do the thing")
+
+check("no processes means no sessions", build_sessions([], {}, {}) == [])
 
 
 print(f"\n=== {ok} passed, {fail} failed ===")

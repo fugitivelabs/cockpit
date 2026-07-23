@@ -180,6 +180,12 @@ def main(argv=None) -> int:
                     help="skip the single-instance guard (testing only)")
     ap.add_argument("--port", type=int, default=DEFAULT_PORT,
                     help="local port for hook/statusline channels (0 disables)")
+    ap.add_argument("--adapter", choices=("terminal", "process"),
+                    default=os.environ.get("COCKPIT_ADAPTER", "terminal"),
+                    help="how sessions are discovered: 'terminal' reads "
+                         "Terminal.app window titles (default); 'process' scans "
+                         "the process table and reads session transcripts, which "
+                         "works for any terminal but cannot answer prompts yet")
     ap.add_argument("--heartbeat", action="store_true",
                     help="run the Stage 0.5 heartbeat view instead of the "
                          "dashboard (device-only; no Terminal automation)")
@@ -219,11 +225,25 @@ def main(argv=None) -> int:
         # The channels registry is shared: the listener writes what hooks and
         # the statusline report, the adapter joins it onto windows by tty.
         registry = Registry()
-        # Adapter #1. When there is a second, this becomes a small registry —
-        # not before (see the config note in ../../docs/architecture.md).
-        adapter = ClaudeCodeAdapter(registry=registry)
+        # Two adapters now, selected by flag so they can be compared on a real
+        # desk rather than argued about. Still not a registry of adapters: the
+        # daemon runs exactly one at a time, and which one is a question the
+        # A/B answers (see ../../docs/reference/session-library.md, Phase B).
+        if args.adapter == "process":
+            from fleet.adapters.claude_process import ClaudeProcessAdapter
+            adapter = ClaudeProcessAdapter(registry=registry)
+        else:
+            adapter = ClaudeCodeAdapter(registry=registry)
+        log.info("session discovery: %s adapter", args.adapter)
+
+        # Reading the screen to offer answer keys is adapter #1's alone — it
+        # depends on proving *which Terminal window* is in front, which the
+        # process adapter deliberately does not do (its identity is a tty).
+        # Absent a reader the board simply offers no answer keys, which is the
+        # documented safe state rather than a special case.
+        prompt_reader = getattr(adapter, "read_prompt", None)
         dashboard = Dashboard(
-            adapter, prompt_reader=adapter.read_prompt,
+            adapter, prompt_reader=prompt_reader,
             # The screen is the only evidence a *denial* ever produces: no hook
             # fires when the tool never runs. Session-scoped because the prompt
             # is gone regardless of which tool raised it.
