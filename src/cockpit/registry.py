@@ -117,6 +117,9 @@ class SessionRecord:
     cwd: str = ""
     flag: Optional[str] = None          # "blocked" | "waiting" | None
     flag_at: float = 0.0
+    # Which tool's approval raised the flag, lowercased. The correlation key for
+    # clearing — see `set_flag`. Empty when the raising event named no tool.
+    flag_tool: str = ""
     telemetry: Optional[Telemetry] = None
     updated_at: float = 0.0
     model: str = ""
@@ -157,8 +160,8 @@ class Registry:
                 rec.model = model
             rec.updated_at = self._clock()
 
-    def set_flag(self, session_id: str, flag: Optional[str],
-                 cwd: str = "") -> None:
+    def set_flag(self, session_id: str, flag: Optional[str], cwd: str = "",
+                 tool: str = "", scope: str = "session") -> None:
         """A hook fired. `flag` of None clears (the session is no longer held).
 
         **Flags never downgrade except by an explicit clear**, and that rule is
@@ -172,23 +175,67 @@ class Registry:
 
         So: a question raises `waiting`; a tool approval raises `blocked` and
         stays there; `Stop` / `idle_prompt` / a new prompt clears it.
+
+        **A tool-scoped clear only clears the tool that raised the flag.** Claude
+        Code runs tools CONCURRENTLY under one session_id, so a sibling
+        finishing is not evidence that the blocked one was answered. Observed
+        live 2026-07-22 — a session held a WebFetch approval while WebSearch,
+        ToolSearch and StructuredOutput kept completing, and each sibling wiped
+        the flag a moment after PermissionRequest raised it:
+
+            /hook/blocked   tool=WebFetch    -> blocked
+            /hook/tool-done tool=WebSearch   -> cleared  (wrong: other tool)
+            (Notification re-nags)           -> waiting
+            /hook/tool-done tool=ToolSearch  -> cleared  (wrong again)
+
+        which is precisely the idle/red/amber flicker that produces. `scope`
+        separates the two kinds of clearing edge:
+
+            "tool"     PostToolUse — clears only a flag this same tool raised
+            "session"  Stop, idle_prompt, UserPromptSubmit — the turn or the
+                       prompt is over, whichever tool was involved
         """
         if not session_id:
             return
         with self._lock:
             rec = self._by_id.setdefault(session_id, SessionRecord(session_id))
+            before = rec.flag
             if cwd:
                 rec.cwd = cwd
             rec.updated_at = self._clock()
+            new_tool = tool.lower()
             if flag is None:
-                rec.flag, rec.flag_at = None, 0.0
-            elif _rank(flag) >= _rank(rec.flag):
-                rec.flag = flag
-                rec.flag_at = self._clock()
+                if (scope == "tool" and rec.flag is not None and rec.flag_tool
+                        and new_tool != rec.flag_tool):
+                    log.debug("session %s keeps %s: %s finished, not %s",
+                              session_id, rec.flag, tool, rec.flag_tool)
+                    return
+                rec.flag, rec.flag_at, rec.flag_tool = None, 0.0, ""
             else:
-                log.debug("session %s keeps %s over %s", session_id, rec.flag, flag)
-                return
-        log.info("session %s flag -> %s", session_id, flag or "clear")
+                # A flag naming a DIFFERENT tool than the one on record is a new
+                # prompt, not an update to the old one, so it replaces outright
+                # rather than rank-competing. This is what lets an AskUserQuestion
+                # (remapped to `waiting`) override a `blocked` left standing by the
+                # Bash prompt one event earlier — the exact case where a question
+                # showed red. A NAMED tool is required: the bare Notification that
+                # accompanies every approval carries no tool, stays subordinate to
+                # ranking, and so still cannot downgrade a real block (the reason
+                # the ranking exists at all).
+                new_prompt = (new_tool and rec.flag is not None
+                              and new_tool != rec.flag_tool)
+                if rec.flag is None or new_prompt or _rank(flag) >= _rank(rec.flag):
+                    rec.flag = flag
+                    rec.flag_at = self._clock()
+                    rec.flag_tool = new_tool
+                else:
+                    log.debug("session %s keeps %s over %s (same/ambiguous prompt)",
+                              session_id, rec.flag, flag)
+                    return
+            changed = rec.flag != before
+        # Only a real transition earns a line, so a quiet board stays quiet in
+        # the log and the events that matter stay findable.
+        if changed:
+            log.info("session %s flag -> %s", session_id, flag or "clear")
 
     def forget(self, session_id: str) -> None:
         with self._lock:

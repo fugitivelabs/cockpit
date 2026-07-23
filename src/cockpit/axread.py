@@ -74,6 +74,15 @@ class Prompt:
 
     options: tuple
     selected: Optional[int] = None
+    # What the menu is *about*, lifted verbatim from the line Claude Code prints
+    # above it ("Fetch https://example.com", "Create ~/.claude/probe.txt"). Empty
+    # when the screen didn't offer one — it is presentation only.
+    #
+    # **Deliberately excluded from the press-time guard.** `_answer_key` compares
+    # `options` and nothing else, because that is the part whose meaning a
+    # keystroke depends on. Including this would let a cosmetic redraw of the
+    # context line veto an answer that is still perfectly valid.
+    subject: str = ""
 
     def digits(self) -> tuple:
         return tuple(d for d, _ in self.options)
@@ -81,6 +90,10 @@ class Prompt:
 
 # "❯ 1. Yes" / "  2. No, and tell Claude what to do differently"
 _OPTION = re.compile(r"^\s*(❯)?\s*(\d)\.\s+(\S.*?)\s*$")
+# The line Claude Code prints to announce what it is about to do. This is the
+# genuinely informative text on the screen — "Fetch https://example.com" tells
+# you what you are approving; "Do you want to proceed?" does not.
+_SUBJECT = re.compile(r"^\s*⏺\s*(\S.*?)\s*$")
 # The footer Claude Code renders under an interactive menu. Requiring it is the
 # difference between "a menu is open" and "the scrollback happens to contain a
 # numbered list" — transcripts are full of numbered lists.
@@ -96,6 +109,41 @@ _FOOTER = re.compile(r"Esc to (cancel|interrupt)", re.I)
 # The footer gives it away: this hint appears only while a text input is
 # active. Two states, one menu, and the difference is a single line.
 _TEXT_INPUT = re.compile(r"ctrl\+g to edit|edit in Vim", re.I)
+
+
+def prompt_ui_present(text: str) -> bool:
+    """Is ANY prompt UI on screen — not necessarily an answerable menu?
+
+    Deliberately weaker than `parse_prompt`, and the difference is the whole
+    point. `parse_prompt` returns None for several screens that are still very
+    much holding you: a live text field ("tell Claude what to do differently"),
+    a menu with more options than we will render, a shape we refuse to parse.
+    Treating "no answerable menu" as "no prompt" would clear a flag on a session
+    that is still waiting for you to type.
+
+    This asks only whether Claude Code's prompt footer is on screen. Its
+    ABSENCE is evidence that nothing is being asked — the missing clearing edge
+    for a denial, where no hook fires at all.
+
+    **Known limit, accepted deliberately.** The free-text follow-up ("tell
+    Claude what to do differently") renders no footer either, so this reads it
+    as "no prompt" and its flag clears — a session that is still waiting for you
+    to type goes quiet on the board. Two things bound that:
+
+      - the probe only ever runs against the FOCUSED session, so the window it
+        can mislead you about is the one already in front of you; and
+      - submitting the text fires UserPromptSubmit, which puts the session back
+        to working immediately.
+
+    The cost is a half-typed box you walked away from showing idle instead of
+    waiting. The alternative was pattern-matching the follow-up's box-drawing,
+    which is brittle against a UI that has already changed once — and a fragile
+    detector here fails toward a permanent false red, which is strictly worse
+    than this. Revisit if it ever bites.
+    """
+    if not text:
+        return False
+    return any(_FOOTER.search(l) for l in text.splitlines()[-TAIL_LINES:])
 
 
 def parse_prompt(text: str) -> Optional[Prompt]:
@@ -135,14 +183,29 @@ def parse_prompt(text: str) -> Optional[Prompt]:
         return None
 
     options, selected = [], None
-    for line in lines[:footer_at]:
+    first_option_at = None
+    for i, line in enumerate(lines[:footer_at]):
         m = _OPTION.match(line)
         if not m:
             continue
+        if first_option_at is None:
+            first_option_at = i
         marker, digit, label = m.group(1), int(m.group(2)), m.group(3)
         options.append((digit, label))
         if marker:
             selected = digit
+
+    # The subject is read from *above* the first option, nearest-first, so a
+    # menu that follows several announcements picks up the one it belongs to.
+    # Purely additive: it can only ever be "" and never changes whether a menu
+    # is recognised, which keeps the safety rules above untouched.
+    subject = ""
+    for line in reversed(lines[:first_option_at if first_option_at is not None
+                               else footer_at]):
+        m = _SUBJECT.match(line)
+        if m:
+            subject = m.group(1)
+            break
 
     if len(options) < 2:
         return None
@@ -151,7 +214,8 @@ def parse_prompt(text: str) -> Optional[Prompt]:
     if [d for d, _ in options] != list(range(1, len(options) + 1)):
         log.debug("discarding non-consecutive options: %s", options)
         return None
-    return Prompt(options=tuple(options), selected=selected)
+    return Prompt(options=tuple(options), selected=selected,
+                  subject=subject)
 
 
 # --- the impure half: getting the text ----------------------------------------

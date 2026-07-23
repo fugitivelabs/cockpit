@@ -193,9 +193,17 @@ class Surface:
             self._deck.set_key_color(index, *rgb)
 
     def set_info(self, text: str, sub: str = "", bg: str = "#000000",
-                 fg: str = "#FFFFFF") -> None:
+                 fg: str = "#FFFFFF", marks=(), pages=None) -> None:
+        """Declare the info bar. See render.render_info for `marks`/`pages`.
+
+        Both are normalised to tuples here rather than trusted from the caller:
+        the whole bar is diffed by value before it is pushed, so a list would
+        make an unchanged bar compare unequal every tick and repaint forever.
+        """
+        marks = tuple((c, str(t)) for c, t in marks) if marks else ()
+        pages = tuple(pages) if pages else None
         with self._lock:
-            self._info = (text, sub, bg, fg)
+            self._info = (text, sub, bg, fg, marks, pages)
         self.flush()
 
     # -- flushing ---------------------------------------------------------
@@ -441,8 +449,13 @@ class Surface:
     # -- run loop ---------------------------------------------------------
 
     def run(self, tick: Optional[Callable[[], None]] = None,
-            interval: float = 1.0, handle_signals: bool = True) -> None:
+            interval=1.0, handle_signals: bool = True) -> None:
         """Block, calling `tick` every `interval` seconds until stopped.
+
+        `interval` may be a callable returning the delay, re-consulted each
+        pass. That is how an animated surface pays for its frame rate only while
+        something is actually moving: a still board keeps ticking once a second,
+        and a breathing one speeds up until it settles.
 
         With `handle_signals` (default) and run() on the main thread, SIGTERM
         and SIGINT are caught and turned into a *graceful* shutdown: the loop
@@ -465,7 +478,8 @@ class Surface:
                         tick()
                     except Exception:
                         log.exception("tick raised")
-                self._stop.wait(interval)
+                delay = interval() if callable(interval) else interval
+                self._stop.wait(delay)
         except KeyboardInterrupt:
             self._shutdown_signal = self._shutdown_signal or "KeyboardInterrupt"
         finally:

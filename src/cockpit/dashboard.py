@@ -26,10 +26,14 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from dataclasses import replace
 from typing import Optional
 
 from deck import BLANK, Component, Slot, Static, View
+from deck.anim import breathe, flash
+from deck.color import over
 
+from . import palette
 from .attention import AttentionTracker
 from .sessions import Adapter, Session, label_sessions, order_sessions, summarize
 
@@ -53,73 +57,122 @@ STALE_AFTER_S = 15.0
 SESSION_KEYS = (0, 1, 2, 3)
 ACTION_KEYS = (4, 5, 6, 7)
 
-# bg, accent — urgency reads as color, which is what makes the board glanceable.
+# The colour language lives in palette.py — one meaning per hue, deck-wide.
+# Kept here as (field, colour) pairs because that is the shape callers and tests
+# already speak; palette.STATE is the source of truth.
+STYLE = {name: (st.field, st.color) for name, st in palette.STATE.items()}
+
+EMPTY = Slot(label="no sessions", sub="waiting", caps=True,
+             bg=palette.STATE["idle"].field, fg=palette.INK_OFF,
+             sub_fg=palette.INK_OFF)
+
+STALE_FG = palette.INK_DIM
+
+# --- motion ----------------------------------------------------------------
 #
-# Grant's mapping (2026-07-21): green = actively working, blue = needs your
-# input, red = blocked on a permission prompt, near-black = quiet. Note that
-# **blue and red are currently unreachable**: nothing sets `waiting` or
-# `blocked` yet, because window titles cannot tell "Claude is asking you
-# something" apart from "sitting at the prompt" (see attention.py). Those two
-# colors light up when the hooks channel lands, not before — the styling is
-# here so that lands as a wiring change rather than a redesign.
-STYLE = {
-    "blocked": ("#3A0A0A", "#FF6B6B"),
-    "waiting": ("#12263A", "#3FA7D6"),
-    "working": ("#0E2A16", "#4CD964"),
-    "idle":    ("#141414", "#3A3A3A"),
-}
-BADGE = {"blocked": "!", "waiting": "?", "working": "●", "idle": ""}
-
-EMPTY = Slot(label="no sessions", sub="waiting…", bg="#141414", fg="#666")
-
-# How far a focused tile is lifted toward white. Enough to read as "lit" from a
-# foot away, not so far that the state colour stops being the state colour —
-# which one you're in must never compete with which one needs you.
-FOCUS_LIFT = 0.30
-
-
-def lighten(hex_color: str, amount: float = FOCUS_LIFT) -> str:
-    """Move a colour toward white by `amount`, preserving its hue."""
-    try:
-        raw = hex_color.lstrip("#")
-        r, g, b = (int(raw[i:i + 2], 16) for i in (0, 2, 4))
-    except (ValueError, IndexError):
-        return hex_color
-    lift = lambda c: min(255, int(c + (255 - c) * amount))
-    return "#%02X%02X%02X" % (lift(r), lift(g), lift(b))
-STALE_FG = "#7A7A7A"
+# Two tiers, because they answer different questions and neither covers the
+# other. ONSET is a decaying flash on the transition into a needs-you state —
+# "this just happened". SUSTAIN is a slow breathe for as long as it stays there
+# — "this is still true". A flash alone is missed if you were not looking; a
+# sustain alone is wallpaper by the end of the first day.
+#
+# Only warm (needs-you) states move. That is the whole discipline: if everything
+# animates, motion stops meaning anything, and the board becomes a thing you
+# want to turn away from rather than glance at.
+BREATHE_PERIOD_S = 2.6
+# How far down the breathe pulls the field. Raised from 0.62 once the tile
+# became a flooded colour rather than a near-black field with a thin rule: at
+# 0.62 a saturated red bottoms out looking like dull brick, so the tile spent
+# half of every cycle not looking like its own state. The signal is the
+# *movement*, and even this shallow a swing is plenty of it. Raised again once
+# the ink was lifted for legibility: dimming a light field (amber) pulls it
+# toward its own dark text, so a deep breathe costs contrast exactly where the
+# tile is hardest to read.
+BREATHE_LO = 0.88
+ONSET_S = 1.4
+ONSET_PEAK = 1.8
 
 
 class SessionTile(Component):
-    """One session on one key. Pure render; the press hands off to a callback."""
+    """One session on one key. Pure render; the press hands off to a callback.
+
+    `since` is the monotonic moment this session entered its current state, used
+    for the onset flash. None means "no transition worth announcing" — a tile
+    that was already blocked when the daemon started should not flash as though
+    it just happened.
+    """
 
     def __init__(self, session: Session, label: str, sub: str, on_focus,
-                 focused: bool = False):
+                 focused: bool = False, since: Optional[float] = None):
         self.session = session
         self.label = label
         self.sub = sub
         self.focused = focused
+        self.since = since
         self._on_focus = on_focus
+        self.style = palette.STATE.get(session.state, palette.STATE["idle"])
+
+    def animating(self) -> bool:
+        """Does this tile need the fast tick?
+
+        Only while something is genuinely moving — a state that breathes, or one
+        whose onset flash has not yet decayed. A state with both flags off costs
+        nothing and never speeds the loop up, which is why switching `blocked`
+        off is a real saving rather than just a cosmetic change.
+        """
+        if self.style.breathes:
+            return True
+        if self.style.flashes and self.since is not None:
+            return (time.monotonic() - self.since) < ONSET_S
+        return False
 
     def render(self) -> Slot:
-        bg, accent = STYLE.get(self.session.state, STYLE["idle"])
-        if self.focused:
-            # "You are here." Rendered as a lift of the state colour rather
-            # than a separate colour or a badge: state already owns colour and
-            # the badge, and focus is a different question from urgency — it
-            # should be legible without competing with either.
-            bg, accent = lighten(bg), lighten(accent, 0.15)
+        st = self.style
+        # Each tier is independently switchable per state (palette.StateStyle),
+        # so "loud but still" and "quiet but moving" are both expressible.
+        pulse = 1.0
+        if st.breathes:
+            pulse *= breathe(BREATHE_PERIOD_S, BREATHE_LO, 1.0)
+        if st.flashes:
+            pulse *= flash(self.since, ONSET_S, ONSET_PEAK)
+
+        ctx = self.session.telemetry.context_pct if self.session.telemetry else None
+        # The hierarchy is fixed and never inverts: **the project name is always
+        # the big line**, the caption is always what that session is doing. The
+        # earlier version promoted the task to the big line whenever a cwd
+        # collided, which meant the top line was a project on one tile and a task
+        # on the next — the eye had nowhere stable to land. Disambiguation now
+        # lives entirely in the caption (see sessions.label_sessions).
+        #
+        # The state is not in the text at all any more: the whole tile is the
+        # state colour, and a corner glyph carries the colour-blind redundancy
+        # the spelled-out word used to. That buys the caption back for the task.
         return Slot(
             label=self.label,
             sub=self.sub,
-            bg=bg,
-            accent=accent,
-            badge=BADGE.get(self.session.state, ""),
+            caps=True,
+            bg=st.field,
+            fg=st.ink,
+            sub_fg=st.ink_dim,
+            badge=st.badge,
+            # Focus is white mass along the bottom, never a tint and never a
+            # top cap — see palette.FOCUS. Anchoring it to the bottom edge is
+            # what keeps the project name at the same height on every tile.
+            foot=palette.FOCUS if self.focused else None,
+            foot_h=palette.FOCUS_FOOT_H,
+            bar=None if ctx is None else ctx / 100.0,
+            # On a flooded field the old meter colours vanish, so the gauge is
+            # drawn in the tile's own ink instead — it reads on red, amber, blue
+            # and slate alike without needing a colour per state.
+            bar_color=palette.CAUTION if (ctx or 0) >= palette.CONTEXT_WARN_PCT
+            else over(st.ink, 0.55, st.field),
+            bar_track=over("#000000", 0.28, st.field),
+            pulse=pulse,
             # Slot identity is the session, not the position — so a tile that
-            # merely moves pages doesn't read as a different thing.
-            # Focus is part of the slot's identity, so a tile that gains or
-            # loses focus actually repaints instead of being diffed away.
-            key=f"{self.session.id}{':focus' if self.focused else ''}",
+            # merely moves pages doesn't read as a different thing. Focus and
+            # the animation phase are part of it, so a tile that gains focus or
+            # advances a frame actually repaints instead of being diffed away.
+            key=f"{self.session.id}{':focus' if self.focused else ''}:{pulse:.3f}",
         )
 
     def on_press(self, long: bool) -> bool:
@@ -155,9 +208,13 @@ class ActionKey(Component):
         if self.enabled():
             return slot
         # design.md's rule, applied to actions: never offer a press that can't
-        # do anything. A dimmed key reads as "not now" rather than "broken".
-        return Slot(label=slot.label, sub=slot.sub, bg="#0C0C0C", fg="#4A4A4A",
-                    accent=None, key=slot.key)
+        # do anything. A dimmed key reads as "not now" rather than "broken" —
+        # so it keeps its text and loses all of its colour, rather than turning
+        # into a different-coloured key that might read as a state.
+        return Slot(label=slot.label, sub=slot.sub, caps=slot.caps,
+                    align=slot.align, bg=palette.FURNITURE,
+                    fg=palette.INK_OFF, sub_fg=palette.INK_OFF,
+                    key=f"{slot.key}:off")
 
     def on_press(self, long: bool) -> bool:
         if self._run is None:
@@ -229,6 +286,19 @@ class CockpitView(View):
         self.page = (self.page + (1 if side == "right" else -1)) % self.pages
         return True
 
+    def animating(self) -> bool:
+        """True if any *visible* component is moving — App's fast-tick hook.
+
+        Visible is the operative word: a blocked session two pages away costs
+        nothing, because you cannot see it breathe. Paging to it starts the fast
+        tick, paging away stops it.
+        """
+        for c in self.components().values():
+            fn = getattr(c, "animating", None)
+            if callable(fn) and fn():
+                return True
+        return False
+
 
 class SessionPoller:
     """Keeps a fresh snapshot of an adapter's sessions, off the render loop.
@@ -240,13 +310,18 @@ class SessionPoller:
 
     def __init__(self, adapter: Adapter, interval: float = POLL_EVERY_S,
                  tracker: Optional[AttentionTracker] = None,
-                 prompt_reader=None):
+                 prompt_reader=None, on_prompt_gone=None):
         self._adapter = adapter
         self._interval = interval
         # Reads the on-screen menu for a session. Injected so it can be faked in
         # tests, and so the AX dependency stays optional — without it the board
         # simply never offers answer keys.
         self._prompt_reader = prompt_reader
+        # Called with a Session whose screen demonstrably has no prompt on it
+        # while its flag still says otherwise. The clearing edge of last resort:
+        # a denial fires no hook at all (the tool never runs), so without this
+        # the tile stays red until FLAG_TTL_S — thirty minutes.
+        self._on_prompt_gone = on_prompt_gone
         self.tracker = tracker or AttentionTracker()
         self._lock = threading.Lock()
         self._sessions: list[Session] = []
@@ -315,7 +390,16 @@ class SessionPoller:
             if focused is not None and self._prompt_reader is not None:
                 target = next((x for x in found if x.handle == focused), None)
                 if target is not None and target.state in ("blocked", "waiting"):
-                    prompt = self._prompt_reader(target)
+                    # Ground truth beats a stale edge (design.md). A denial
+                    # fires no hook — the tool never runs — so the screen is the
+                    # only thing that can say the prompt is gone. Checked before
+                    # reading the menu: if there is no prompt UI there is no
+                    # menu to read either.
+                    if self._screen_says_clear(target):
+                        found = [replace(x, state="idle") if x is target else x
+                                 for x in found]
+                    else:
+                        prompt = self._prompt_reader(target)
         except Exception:
             # An adapter is third-party-ish code from this thread's point of
             # view; one bad poll must not kill the poller for the day.
@@ -327,6 +411,32 @@ class SessionPoller:
             self._prompt = prompt
             self._updated_at = time.monotonic()
         self._last_poll = time.monotonic()
+
+    def _screen_says_clear(self, target: Session) -> bool:
+        """True only if the screen PROVES nothing is being asked of `target`.
+
+        Three-valued on purpose. The probe returns None when Accessibility is
+        unavailable or the window moved under us, and None must change nothing —
+        an unreadable screen is not evidence of an answered prompt. Only an
+        explicit False (screen read, no prompt footer found) clears.
+        """
+        probe = getattr(self._adapter, "prompt_ui_present", None)
+        if not callable(probe) or self._on_prompt_gone is None:
+            return False
+        try:
+            present = probe(target)
+        except Exception:
+            log.exception("prompt-UI probe failed for %s", target.id)
+            return False
+        if present is not False:
+            return False
+        log.info("session %s: no prompt on screen, clearing stale flag", target.id)
+        try:
+            self._on_prompt_gone(target)
+        except Exception:
+            log.exception("on_prompt_gone failed for %s", target.id)
+            return False
+        return True
 
     def snapshot(self) -> list[Session]:
         with self._lock:
@@ -354,13 +464,18 @@ class Dashboard:
 
     def __init__(self, adapter: Adapter, key_count: int = 8,
                  interval: float = POLL_EVERY_S, session_keys=SESSION_KEYS,
-                 prompt_reader=None):
+                 prompt_reader=None, on_prompt_gone=None):
         self._adapter = adapter
         self._prompt_reader = prompt_reader
-        self.poller = SessionPoller(adapter, interval, prompt_reader=prompt_reader)
+        self.poller = SessionPoller(adapter, interval, prompt_reader=prompt_reader,
+                                    on_prompt_gone=on_prompt_gone)
         self.view = CockpitView(session_keys, key_count=key_count)
         self._signature: Optional[tuple] = None
         self._sessions: list[Session] = []
+        # {session id: (state, monotonic when it entered that state)} — the
+        # basis for the onset flash. Kept here rather than on the tile because
+        # tiles are rebuilt whenever the board changes and would lose it.
+        self._entered: dict[str, tuple[str, float]] = {}
 
     # --- lifecycle ---------------------------------------------------------
 
@@ -397,12 +512,32 @@ class Dashboard:
         labels = label_sessions(found)
         focused = self.poller.focused_handle()
         tiles = [SessionTile(s, *labels[s.id], self.focus,
-                             focused=(s.handle == focused and focused is not None))
+                             focused=(s.handle == focused and focused is not None),
+                             since=self._mark_state(s))
                  for s in found]
         self.view.set_sessions(tiles or [Static(EMPTY)])
         log.debug("dashboard rebuilt — %d sessions, %d pages",
                   len(tiles), self.view.pages)
         return True
+
+    def _mark_state(self, s: Session) -> Optional[float]:
+        """Record this session's state, returning when it entered one that flashes.
+
+        Returns None unless the session has *just transitioned into* a needs-you
+        state. Two cases deliberately do not flash: a state we have already seen
+        for this session (it is not news), and a session observed for the first
+        time (the daemon restarting, or a window scrolling into view, is not the
+        same event as a session blocking, and treating it as one would flash the
+        whole board on every start).
+        """
+        prev = self._entered.get(s.id)
+        if prev is not None and prev[0] == s.state:
+            return prev[1] if palette.STATE.get(s.state, palette.STATE["idle"]).needs_you else None
+        now = time.monotonic()
+        self._entered[s.id] = (s.state, now)
+        if prev is None:
+            return None
+        return now if palette.STATE.get(s.state, palette.STATE["idle"]).needs_you else None
 
     def focused_session(self) -> Optional[Session]:
         """The session you are looking at right now, or None.
@@ -503,28 +638,58 @@ class Dashboard:
         return self.view.pages
 
     def info(self) -> tuple:
-        """(text, sub) for the info bar — the aggregate the keys can't show."""
+        """(text, sub, bg, fg, marks, pages) — the aggregate the keys can't show.
+
+        The headline answers the only question worth reading from across the
+        room: does anything need me? A tally of four states in a row of prose
+        does not answer it — you have to read all four numbers and then do the
+        arithmetic yourself. So the headline states the conclusion, and the
+        counts drop to coloured chips in the same hues as the tiles, which are
+        countable without being read.
+        """
         counts = summarize(self._sessions)
         n = len(self._sessions)
-        text = "no sessions" if n == 0 else f"{n} session{'' if n == 1 else 's'}"
 
-        bits = []
-        if counts["blocked"]:
-            bits.append(f"{counts['blocked']} blocked")
-        if counts["waiting"]:
-            bits.append(f"{counts['waiting']} waiting")
-        bits.append(f"{counts['working']} working")
-        bits.append(f"{counts['idle']} idle")
-        if self.pages > 1:
-            bits.append(f"pg {self.view.page + 1}/{self.pages}")
+        # Only non-zero states earn a chip: a row of zeroes is noise, and the
+        # absence of a colour is itself the information. The tally is constant —
+        # it is the one thing worth reading from across the room, and it says
+        # more per pixel than any sentence could.
+        marks = tuple((palette.STATE[name].color, counts[name])
+                      for name in ("blocked", "waiting", "working", "idle")
+                      if counts[name])
+        # Only the states that want something, when the headline has a question
+        # to show. The full tally is worth its width while the bar is idle; it
+        # is not worth eating the one line that can tell you what you are being
+        # asked, and the calm states are the ones you would not act on anyway.
+        urgent_marks = tuple((palette.STATE[name].color, counts[name])
+                             for name in ("blocked", "waiting") if counts[name])
+
+        # Default headline: just the count. There was a "N NEEDS YOU" banner in
+        # red here and it is gone (Grant, 2026-07-22) — the coloured chips
+        # already carry that, the board itself is unmissable, and a full-width
+        # alarm for something two other channels are saying is noise.
+        text = "no sessions" if n == 0 else f"{n} session{'' if n == 1 else 's'}"
+        fg = palette.INK_DIM if n == 0 else palette.INK
+        sub = ""
+
+        # When something is actually being asked, the bar stops reporting and
+        # starts quoting: the screen's own words for what is about to happen.
+        # "Fetch https://example.com" tells you what you are approving in a way
+        # no count or colour can, and it is the one moment the bar has something
+        # more useful to say than how many sessions exist.
+        prompt = self.focused_prompt()
+        if prompt is not None and prompt.subject:
+            text, fg = prompt.subject, palette.INK
+            focused = self.focused_session()
+            sub = focused.cwd if focused is not None else ""
+            marks = urgent_marks
 
         age = self.poller.age()
-        fg = "#FFFFFF"
         if age is None or age > STALE_AFTER_S:
             # Say so rather than presenting a stale board as current.
-            bits.append("stale")
-            fg = STALE_FG
-        return (text, "  ·  ".join(bits), "#000000", fg)
+            sub, fg = "stale", STALE_FG
+
+        return (text, sub, "#000000", fg, marks, (self.view.page, self.pages))
 
 
 __all__ = ["Dashboard", "SessionPoller", "SessionTile", "STYLE", "EMPTY", "BLANK"]

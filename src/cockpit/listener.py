@@ -51,9 +51,18 @@ HOOK_PATHS = {
     "/hook/needs-input": NEEDS_INPUT,  # Notification: agent_needs_input, elicitation
     "/hook/idle": None,              # Notification: idle_prompt — nothing pending
     "/hook/stop": None,              # Stop — turn over
-    "/hook/active": None,            # UserPromptSubmit / PostToolUse / PermissionDenied
-                                     # — the prompt was answered, one way or another
+    "/hook/active": None,            # UserPromptSubmit — a new turn began
+    "/hook/tool-done": None,         # PostToolUse — see TOOL_SCOPED
 }
+
+# Endpoints whose clear applies ONLY to the tool that raised the flag. Claude
+# Code runs tools concurrently under one session_id, so "some tool finished" is
+# not evidence that the tool holding a permission prompt was answered — and
+# assuming otherwise is what made a blocked tile flicker against its siblings.
+#
+# Anything not listed here is a session-wide clear: the turn ended, or the
+# prompt went away, and which tool was involved no longer matters.
+TOOL_SCOPED = {"/hook/tool-done"}
 
 
 def _telemetry(payload: dict) -> Optional[Telemetry]:
@@ -192,7 +201,9 @@ class _Handler(BaseHTTPRequestHandler):
             # echoed back. Kept at DEBUG so it's available when a state looks
             # wrong without spamming a normal day's log.
             log.debug("payload %s: %s", path, json.dumps(payload)[:600])
-            self.registry.set_flag(session_id, flag, cwd=cwd)
+            self.registry.set_flag(
+                session_id, flag, cwd=cwd, tool=tool,
+                scope="tool" if path in TOOL_SCOPED else "session")
         else:
             log.warning("unknown endpoint %s", path)
             return

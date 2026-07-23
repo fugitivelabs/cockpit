@@ -63,9 +63,9 @@ WIRING = (
     # Fires ONLY for tool approvals -> the stronger claim, wins by precedence.
     ("PermissionRequest", None, "/hook/blocked"),
     # Clearing edges.
-    ("PostToolUse", PROMPTING_TOOLS, "/hook/active"),
-    ("PostToolUse", "mcp__.*", "/hook/active"),
-    ("PermissionDenied", None, "/hook/active"),
+    ("PostToolUse", PROMPTING_TOOLS, "/hook/tool-done"),
+    ("PostToolUse", "mcp__.*", "/hook/tool-done"),
+    ("PermissionDenied", None, "/hook/tool-done"),
     ("Stop", None, "/hook/stop"),
     ("UserPromptSubmit", None, "/hook/active"),
 )

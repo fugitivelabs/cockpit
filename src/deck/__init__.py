@@ -15,10 +15,13 @@ Knows nothing about what slots mean — that belongs to the layer above.
 
 import logging as _logging
 
+from . import anim, color
+from .anim import blink, breathe, flash, phase
 from .app import App, PagedView, View
+from .color import darken, lighten, mix, over, scale
 from .components import Button, Component, Live, Static, meter
 from .lifecycle import AlreadyRunning, SingleInstance, configure_logging
-from .render import BLANK, Slot, error_slot, render, render_info, tile
+from .render import BLANK, Slot, error_slot, font, render, render_info, tile
 from .surface import (
     LONG_PRESS_S,
     TOUCH_LEFT,
@@ -44,6 +47,19 @@ __all__ = [
     "LONG_PRESS_S",
     "DeckUnavailable",
     "error_slot",
+    "font",
+    # colour arithmetic + animation (mechanism only — no palette, no meanings)
+    "color",
+    "lighten",
+    "darken",
+    "scale",
+    "mix",
+    "over",
+    "anim",
+    "breathe",
+    "flash",
+    "phase",
+    "blink",
     # component framework
     "Component",
     "Static",

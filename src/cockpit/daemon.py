@@ -215,7 +215,13 @@ def main(argv=None) -> int:
         # Adapter #1. When there is a second, this becomes a small registry —
         # not before (see the config note in ../../docs/architecture.md).
         adapter = ClaudeCodeAdapter(registry=registry)
-        dashboard = Dashboard(adapter, prompt_reader=adapter.read_prompt)
+        dashboard = Dashboard(
+            adapter, prompt_reader=adapter.read_prompt,
+            # The screen is the only evidence a *denial* ever produces: no hook
+            # fires when the tool never runs. Session-scoped because the prompt
+            # is gone regardless of which tool raised it.
+            on_prompt_gone=lambda s: registry.set_flag(
+                s.session_id, None, scope="session") if s.session_id else None)
         if args.port:
             # A hook firing wakes the poller immediately instead of the board
             # waiting out the interval.

@@ -2,3 +2,6 @@
 __pycache__/
 *.pyc
 *.log
+
+# harness scratch
+.claude/

@@ -120,12 +120,30 @@ class App:
     """
 
     def __init__(self, surface: Optional[Surface] = None, view: Optional[View] = None,
-                 interval: float = 1.0):
+                 interval: float = 1.0, fast_interval: float = 0.09):
         self.surface = surface or Surface()
         self.view = view or View()
         self.interval = interval
+        self.fast_interval = fast_interval
         self._owns_surface = surface is None
         self._info: Optional[Callable[[], tuple]] = None
+
+    def _interval(self) -> float:
+        """Tick fast only while the view says something is moving.
+
+        A View opts in by growing an `animating()` predicate; one that doesn't
+        keeps the slow tick and behaves exactly as before. The fast rate is
+        affordable because it does not imply repainting: renders are cached by
+        Slot value and `flush()` diffs before writing, so a tick where nothing
+        changed costs a few pure render() calls and no USB traffic at all.
+        """
+        wants = getattr(self.view, "animating", None)
+        try:
+            if callable(wants) and wants():
+                return self.fast_interval
+        except Exception:
+            log.exception("view.animating() raised; falling back to slow tick")
+        return self.interval
 
     def info(self, fn: Callable[[], tuple]) -> None:
         """Register an info-bar provider: fn() -> (text, sub) or (text, sub, bg, fg)."""
@@ -162,7 +180,7 @@ class App:
         self.surface.set_touch(TOUCH_LEFT, glow)
         self.surface.set_touch(TOUCH_RIGHT, glow)
         self._paint()
-        self.surface.run(tick=self._paint, interval=self.interval)
+        self.surface.run(tick=self._paint, interval=self._interval)
 
     def __enter__(self):
         if self._owns_surface:

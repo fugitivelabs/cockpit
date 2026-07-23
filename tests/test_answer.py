@@ -15,8 +15,9 @@ sys.path.insert(0, os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
 from cockpit import actions as actions_mod
+from cockpit import palette
 from cockpit.actions import ACTION_BG, answer_keys
-from cockpit.axread import Prompt, parse_prompt
+from cockpit.axread import Prompt, parse_prompt, prompt_ui_present
 from cockpit.sessions import Session
 
 ok = 0
@@ -197,16 +198,88 @@ check("two options -> two answer keys plus Esc in the spare slot",
 check("key4 is labelled from the screen", bar[4].render().label == "Yes")
 check("key5 is labelled from the screen", bar[5].render().label == "No")
 check("spare slot becomes Esc", bar[6].render().label == "Esc")
-check("Yes is green", bar[4].render().accent == "#4CD964")
-check("No is red", bar[5].render().accent == "#FF6B6B")
+check("…and carries no icon, because Esc is not a yes or a no",
+      bar[6].render().icon == "")
+# The hue moved from the field to the ICON and the frame: a quiet key with a
+# coloured glyph, not a flooded one.
+check("Yes is green", bar[4].render().icon_color == palette.GO)
+check("…on a quiet field, not a flooded one",
+      bar[4].render().bg == palette.ANSWER_BG)
+check("…with a check, drawn not typed", bar[4].render().icon == "check")
+# Red returns for "No" — but as a GLYPH on a dark key, never as a field. A
+# flooded red tile means "a session needs you"; a red cross on a quiet key in
+# the bottom row is a different object entirely, and green/red for yes/no is
+# the most over-learned pair there is.
+check("No is red again, in the icon", bar[5].render().icon_color == palette.WARNING)
+check("…and a cross", bar[5].render().icon == "cross")
+check("…but its FIELD is quiet — the flood is what meant 'session'",
+      bar[5].render().bg == palette.ANSWER_BG)
+check("no answer key floods its field with any state hue",
+      all(bar[k].render().bg == palette.ANSWER_BG for k in bar))
+check("answer keys are centred, unlike the left-aligned session tiles",
+      all(bar[k].render().align == "center" for k in bar))
+check("every answer key is framed — the one shape that means 'this key types'",
+      all(bar[k].render().frame is not None and bar[k].render().frame_w >= 3
+          for k in bar))
+check("the digit rides in the corner, freeing the body for the option text",
+      bar[4].render().badge == "1", bar[4].render().badge)
+check("…so the body carries the option itself",
+      bar[4].render().label == "Yes", bar[4].render().label)
 
 d3 = FakeDash(parse_prompt(FETCH))
 bar3 = answer_keys(d3)
 check("three options fill all three slots", sorted(bar3) == [4, 5, 6])
 check("a permission-widening YES is amber, not green",
-      bar3[5].render().accent == "#E8B923", bar3[5].render().accent)
+      bar3[5].render().icon_color == palette.CAUTION, bar3[5].render().icon_color)
 check("…and is visibly distinct from the plain Yes",
-      bar3[4].render().accent != bar3[5].render().accent)
+      bar3[4].render().icon_color != bar3[5].render().icon_color)
+check("…carrying a doubled tick: approve, and again, and again",
+      bar3[5].render().icon == "check-double")
+
+print("\n[subject] the screen's own words for what is being asked")
+check("the announcement line is captured",
+      parse_prompt(FETCH).subject == "Fetch https://example.com",
+      repr(parse_prompt(FETCH).subject))
+check("…even when a question line sits between it and the options",
+      parse_prompt(BASH).subject
+      == "I'll write a probe file outside the project.",
+      repr(parse_prompt(BASH).subject))
+check("a screen with no announcement yields an empty subject, not a crash",
+      parse_prompt(" \u276f 1. Yes\n   2. No\n\n Esc to cancel\n").subject == "")
+check("capturing it did not change what counts as a menu",
+      parse_prompt(FETCH).options == ((1, "Yes"),
+                                      (2, "Yes, and don't ask again for example.com"),
+                                      (3, "No, and tell Claude what to do differently")))
+check("a free-text follow-up is still refused outright",
+      parse_prompt(FOLLOWUP) is None)
+
+# The subject is presentation. Letting it into the press-time guard would mean a
+# cosmetic redraw of the context line could veto a still-valid answer.
+_a = Prompt(options=((1, "Yes"), (2, "No")), subject="Fetch one")
+_b = Prompt(options=((1, "Yes"), (2, "No")), subject="Fetch two")
+check("two prompts differing ONLY in subject have identical options",
+      _a.options == _b.options)
+
+print("\n[prompt_ui_present] the clearing edge a denial never fires")
+# Answering "No" runs no tool, so PostToolUse cannot fire; PermissionDenied is
+# auto-mode-only. The screen is the only evidence that the prompt is gone.
+check("a live menu is prompt UI", prompt_ui_present(BASH) is True)
+check("…so is a three-option one", prompt_ui_present(FETCH) is True)
+check("a plain scrollback is NOT",
+      prompt_ui_present("⏺ done\n\nsome output\n$ ") is False)
+check("empty text is NOT", prompt_ui_present("") is False)
+
+# The distinction that keeps this from clearing a session still holding you:
+# the free-text follow-up has no ANSWERABLE menu, but is very much a prompt.
+check("the free-text follow-up yields no answer keys",
+      parse_prompt(FOLLOWUP) is None)
+# Documented limit rather than a bug: the follow-up renders no footer, so it
+# reads as "no prompt" and the flag clears. Bounded because the probe only runs
+# on the FOCUSED session — the window already in front of you — and submitting
+# fires UserPromptSubmit. Pinned so the tradeoff is a decision, not a surprise.
+check("the free-text follow-up reads as no-prompt (accepted limit)",
+      prompt_ui_present(FOLLOWUP) is False,
+      "see axread.prompt_ui_present — bounded to the focused window")
 
 check("no menu on screen -> no answer keys at all",
       answer_keys(FakeDash(None)) is None)
@@ -217,8 +290,8 @@ four = Prompt(options=((1, "Left"), (2, "Right"), (3, "type something"),
 bar4 = answer_keys(FakeDash(four))
 check("a four-option menu takes all four keys", sorted(bar4) == [4, 5, 6, 7])
 check("…displacing Firefox", bar4[7].render().label != "Firefox")
-check("…and key7 is the fourth option", bar4[7].render().sub.startswith("4 ·"),
-      bar4[7].render().sub)
+check("…and key7 is the fourth option", bar4[7].render().badge == "4",
+      bar4[7].render().badge)
 check("…with no Esc key (keyboard Esc still works)",
       not any(c.render().label == "Esc" for c in bar4.values()))
 

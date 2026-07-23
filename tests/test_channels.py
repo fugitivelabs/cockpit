@@ -259,7 +259,69 @@ post("/hook/stop", {"session_id": "s1"})
 
 check("every configured hook path is mapped",
       set(HOOK_PATHS) == {"/hook/blocked", "/hook/needs-input", "/hook/idle",
-                          "/hook/stop", "/hook/active"})
+                          "/hook/stop", "/hook/active", "/hook/tool-done"})
+
+print("\n[question vs block] a named tool is a new prompt, not a downgrade")
+# From a real capture (2026-07-22): a turn ended with a Bash approval one event
+# before an AskUserQuestion, so a stale `blocked` was standing when the question
+# arrived. The remap made the question `waiting`, but the no-downgrade rule kept
+# it red. A question is "needs you", not "blocked on a tool", so it must win.
+rq = Registry(); rq.note_statusline("q", tty="/dev/ttys060")
+rq.set_flag("q", BLOCKED, tool="Bash")
+rq.set_flag("q", NEEDS_INPUT, tool="AskUserQuestion")
+check("a question naming its tool overrides a stale block from another tool",
+      rq.by_tty()["/dev/ttys060"].flag == NEEDS_INPUT,
+      rq.by_tty()["/dev/ttys060"].flag)
+
+# The two things the ranking still has to protect, or it was the wrong fix:
+rp = Registry(); rp.note_statusline("p", tty="/dev/ttys061")
+rp.set_flag("p", BLOCKED, tool="Bash")
+rp.set_flag("p", NEEDS_INPUT, tool="")          # the bare notification, no tool
+check("a NO-tool notification still cannot downgrade a real block",
+      rp.by_tty()["/dev/ttys061"].flag == BLOCKED, rp.by_tty()["/dev/ttys061"].flag)
+rp2 = Registry(); rp2.note_statusline("p2", tty="/dev/ttys062")
+rp2.set_flag("p2", NEEDS_INPUT, tool="")        # …in either arrival order
+rp2.set_flag("p2", BLOCKED, tool="Bash")
+check("…in either order", rp2.by_tty()["/dev/ttys062"].flag == BLOCKED)
+
+# And a real tool block after a question must still go red.
+rb = Registry(); rb.note_statusline("b", tty="/dev/ttys063")
+rb.set_flag("b", NEEDS_INPUT, tool="AskUserQuestion")
+rb.set_flag("b", BLOCKED, tool="Bash")
+check("a real tool approval after a question shows red",
+      rb.by_tty()["/dev/ttys063"].flag == BLOCKED)
+
+print("\n[concurrency] a sibling tool finishing must not clear a live prompt")
+# Replayed from a real capture (2026-07-22): a session held a WebFetch approval
+# while WebSearch / ToolSearch / StructuredOutput kept completing under the SAME
+# session_id. Each sibling used to wipe the flag a moment after it was raised,
+# and the Notification re-nag put it back — the idle/red/amber flicker.
+reg2 = Registry()
+reg2.note_statusline("c1", tty="/dev/ttys050")
+reg2.set_flag("c1", BLOCKED, tool="WebFetch")
+check("a tool approval raises blocked", reg2.by_tty()["/dev/ttys050"].flag == BLOCKED)
+for sibling in ("WebSearch", "ToolSearch", "StructuredOutput", "WebSearch"):
+    reg2.set_flag("c1", None, tool=sibling, scope="tool")
+check("…and four sibling completions leave it standing",
+      reg2.by_tty()["/dev/ttys050"].flag == BLOCKED,
+      str(reg2.by_tty()["/dev/ttys050"].flag))
+reg2.set_flag("c1", NEEDS_INPUT, tool="")     # the Notification re-nag
+check("…a re-nag cannot downgrade it either",
+      reg2.by_tty()["/dev/ttys050"].flag == BLOCKED)
+reg2.set_flag("c1", None, tool="WebFetch", scope="tool")
+check("the tool that RAISED it does clear it",
+      reg2.by_tty()["/dev/ttys050"].flag is None)
+
+reg2.set_flag("c1", BLOCKED, tool="Bash")
+reg2.set_flag("c1", None, scope="session")
+check("a session-wide edge (Stop/idle) clears whatever the tool was",
+      reg2.by_tty()["/dev/ttys050"].flag is None)
+
+reg2.set_flag("c1", BLOCKED, tool="")          # raised with no tool named
+reg2.set_flag("c1", None, tool="Whatever", scope="tool")
+check("a flag raised without a tool name is still clearable",
+      reg2.by_tty()["/dev/ttys050"].flag is None,
+      "otherwise an unnamed flag could never be cleared")
 
 # Robustness: none of these may take the daemon down or emit a decision.
 raw = urllib.request.Request(f"http://127.0.0.1:{port}/hook/blocked",
