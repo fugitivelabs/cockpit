@@ -185,7 +185,9 @@ def main(argv=None) -> int:
                     help="how sessions are discovered: 'terminal' reads "
                          "Terminal.app window titles (default); 'process' scans "
                          "the process table and reads session transcripts, which "
-                         "works for any terminal but cannot answer prompts yet")
+                         "finds sessions in any terminal and labels them better. "
+                         "Both can answer prompts; navigating to a session in a "
+                         "non-Terminal.app window is not implemented yet")
     ap.add_argument("--heartbeat", action="store_true",
                     help="run the Stage 0.5 heartbeat view instead of the "
                          "dashboard (device-only; no Terminal automation)")
@@ -236,11 +238,11 @@ def main(argv=None) -> int:
             adapter = ClaudeCodeAdapter(registry=registry)
         log.info("session discovery: %s adapter", args.adapter)
 
-        # Reading the screen to offer answer keys is adapter #1's alone — it
-        # depends on proving *which Terminal window* is in front, which the
-        # process adapter deliberately does not do (its identity is a tty).
-        # Absent a reader the board simply offers no answer keys, which is the
-        # documented safe state rather than a special case.
+        # Both adapters read the screen; an adapter that could not would simply
+        # supply no reader, and the board would offer no answer keys — the
+        # documented safe state rather than a special case. Asked for by name so
+        # a future adapter (a remote agent, say) can decline without any change
+        # here.
         prompt_reader = getattr(adapter, "read_prompt", None)
         dashboard = Dashboard(
             adapter, prompt_reader=prompt_reader,
