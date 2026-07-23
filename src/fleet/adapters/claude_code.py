@@ -2,12 +2,12 @@
 
 Adapter #1, and the one that shapes the seam. Everything Claude-specific about
 discovery lives here: the title format, the state glyphs, and how you navigate
-to a session. `cockpit/sessions.py` holds the model; `cockpit/dashboard.py`
+to a session. `fleet/sessions.py` holds the model; `cockpit/dashboard.py`
 renders it; neither imports anything from this file except through `Adapter`.
 
 Channel used: **window titles only**. That is a deliberate Stage-1 floor — it
 needs no hooks, no statusline, no plugin install, and no Accessibility grant
-(Terminal scripting is Automation-of-Terminal; see ../../docs/operations.md Permissions).
+(Terminal scripting is Automation-of-Terminal; see ../../../docs/operations.md Permissions).
 It buys `working` vs `idle` and nothing more. Stage 2's hooks add real `blocked`
 state and the statusline adds telemetry; both flow into the same Session, so
 this file gains fields rather than the layers above gaining special cases.
@@ -28,11 +28,11 @@ from typing import Optional
 
 from dataclasses import replace
 
-from .osint import frontmost
-from .registry import fuse_state
-from .sessions import Session
+from ..macos.osint import frontmost
+from ..registry import fuse_state
+from ..sessions import Session
 
-log = logging.getLogger("deck.cockpit.claude")
+log = logging.getLogger("fleet.claude")
 
 AGENT = "claude"
 TERMINAL_BUNDLE = "com.apple.Terminal"
@@ -247,7 +247,7 @@ class ClaudeCodeAdapter:
         screens `read_prompt` refuses to parse. None means "could not tell",
         which callers must treat as "change nothing".
         """
-        from .axread import prompt_ui_present as _present, visible_text
+        from ..macos.axread import prompt_ui_present as _present, visible_text
         front = frontmost()
         if front is None or front.bundle_id != TERMINAL_BUNDLE:
             return None
@@ -265,7 +265,7 @@ class ClaudeCodeAdapter:
         screen — see axread.py. Returns None when Accessibility is unavailable,
         which simply means the deck offers no answer keys.
         """
-        from .axread import read_prompt as _read
+        from ..macos.axread import read_prompt as _read
         front = frontmost()
         if front is None or front.bundle_id != TERMINAL_BUNDLE:
             return None
@@ -329,7 +329,7 @@ class ClaudeCodeAdapter:
         """Raise that window and bring Terminal forward. The Stage-1 action.
 
         Window-level only. Every observed session is one tab in its own window
-        (see ../../docs/design.md), so tab selection buys nothing yet; when it does, it
+        (see ../../../docs/design.md), so tab selection buys nothing yet; when it does, it
         belongs right here — the layers above just say "go to this session".
         """
         try:

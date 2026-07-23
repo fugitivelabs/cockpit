@@ -6,7 +6,7 @@ use-case-agnostic device library) and `cockpit/` — which is *both* a substanti
 glue that renders it. This promotes the engine to a **second first-class in-repo
 library**, peer to `deck/`, so the end state is:
 
-    <libname>/   observe + control locally-running agent-CLI sessions.
+    fleet/       observe + control locally-running agent-CLI sessions.
                  Knows nothing about the Stream Deck.
     deck/        drive the device. Knows nothing about Claude.
     cockpit/     light UI glue: wire the two together.
@@ -52,34 +52,39 @@ handler (`from .doctor import daemon_self_checks`, listener.py:116). That single
 edge is the only thing standing between us and a clean cut.
 
 **Sever it by inversion:** the library `ChannelListener` takes an optional
-`self_check` callable (default `None` → the `/doctor` route 404s or returns
-`{"checks": []}`). cockpit's `doctor.py` passes `daemon_self_checks` in when it
-wires the daemon. Library gains a seam; app keeps its endpoint; the dependency
-now points app→lib, never lib→app.
+`self_check` callable (absent → `/doctor` still answers, with `checks: []`).
+`daemon.py` passes `daemon_self_checks` in when it builds the listener. Library
+gains a seam; app keeps its endpoint; the dependency now points app→lib, never
+lib→app. A raising probe degrades to `checks: []` rather than a 500 — the
+endpoint is a debugging aid and must not become a way to take the daemon down.
 
 ## File-by-file fate
 
 | File | Destination | Notes |
 |---|---|---|
-| `sessions.py` | `<libname>/` core | Move verbatim. The Session/Telemetry/Adapter model, ordering, labeling, summarize. Pure. |
-| `registry.py` | `<libname>/` core | Move verbatim. The channel fusion — the crown jewels (see below). |
-| `attention.py` | `<libname>/` core | Move; `STATE_DIR` default path becomes a constructor arg the app supplies (it already accepts `state_path`). |
-| `statusline.py` | `<libname>/` | Move; `COCKPIT_PORT`/URL stay env-configurable. Reusable tty-walking shim. |
-| `osint.py` | `<libname>/os/` (macOS) | Agent-agnostic OS focus/activate/keystroke. |
-| `axread.py` | `<libname>/os/` (macOS) | Accessibility screen read + prompt parse. |
-| `claude_code.py` | `<libname>/adapters/` | The reference adapter (Claude + Terminal.app). One of eventually several. |
-| `listener.py` | `<libname>/` | Move after severing the `doctor` edge (inject `self_check`). |
+| `sessions.py` | `fleet/` core | Move verbatim. The Session/Telemetry/Adapter model, ordering, labeling, summarize. Pure. |
+| `registry.py` | `fleet/` core | Move verbatim. The channel fusion — the crown jewels (see below). |
+| `attention.py` | `fleet/` core | Move; `STATE_DIR` default path becomes a constructor arg the app supplies (it already accepts `state_path`). |
+| `statusline.py` | `fleet/` | Move; `COCKPIT_PORT`/URL stay env-configurable. Reusable tty-walking shim. |
+| `osint.py` | `fleet/macos/` | Agent-agnostic OS focus/activate/keystroke. (Named `macos/`, not `os/` — the latter shadows the stdlib module in every reader's head.) |
+| `axread.py` | `fleet/macos/` | Accessibility screen read + prompt parse. |
+| `claude_code.py` | `fleet/adapters/` | The reference adapter (Claude + Terminal.app). One of eventually several. |
+| `listener.py` | `fleet/` | Move after severing the `doctor` edge (inject `self_check`). |
 | `dashboard.py` | stays `cockpit/` | Deck tiles — consumes the library. |
 | `actions.py` | stays `cockpit/` | Press→action routing. |
 | `daemon.py` | stays `cockpit/` | Orchestrator; wires lib + deck. |
 | `palette.py`, `doctor.py`, `claude_config.py`, `__main__.py` | stay `cockpit/` | App glue/entry. |
 
-Tests move with their code and split where a file straddles the line:
-- `test_channels.py` (107) → library (registry/fusion/listener/statusline).
-- `test_osint.py` (13) → library.
-- `test_sessions.py` (176) → **split**: parse/order/label → library; SessionTile/poller/dashboard → app.
-- `test_answer.py` (65) → **split**: axread parsing → library; actions answer-bar → app.
-- `test_framework.py` (24), `test_lifecycle.py` (37), `test_visual.py` (96) → unaffected (deck/app).
+Tests keep their imports pointed at the new paths. **Splitting the straddling
+files is deliberately deferred**, and that is a judgement rather than an
+oversight: `test_sessions.py` and `test_answer.py` interleave library assertions
+(parse/order/label, prompt parsing) with app assertions (tiles, the answer bar)
+line by line, so carving them apart during a move that must not change behavior
+trades real risk of dropping an assertion for a purely cosmetic filing. The
+suite is the safety net for this refactor; reorganising the safety net *during*
+the refactor is the wrong order. Do it as its own change, when a second consumer
+of `fleet/` makes "which of these are the library's tests" a question that
+actually needs answering.
 
 ## The crown jewels — logic that MUST survive the move byte-for-byte
 
@@ -104,11 +109,33 @@ through the move.
 
 ## Phased plan
 
-**Phase A — mechanical extraction, zero behavior change.** Create `<libname>/`,
-move the files, sever the `listener→doctor` edge by injection, fix imports, move
-+ split the tests. Done when the suite is green at the same 518 assertions and
-`cockpit` runs unchanged. Pure structure; no new capability. Commit as its own
-reviewable unit.
+**Phase A — mechanical extraction, zero behavior change. DONE 2026-07-22.**
+Created `fleet/`, moved the files with `git mv`, severed the `listener→doctor`
+edge by injection, rewired imports, pointed the tests at the new paths. Green at
+the same 518 assertions, plus 4 new ones covering the injected seam = **522**.
+Verified beyond the suite: nothing in `fleet/` imports `cockpit` *or* `deck`,
+every entry point imports, and the statusline still prints and exits 0 with the
+daemon down.
+
+**Two traps it hit that the plan above did not predict** — both silent, both
+the kind a "mechanical" move is supposed to be too boring to contain:
+
+1. **Logging would have gone quiet.** Every moved module named its logger
+   `deck.cockpit.*`, and `configure_logging()` attaches handlers to the `deck`
+   tree — so the names were *inheriting* their handlers. Renaming them to
+   `fleet.*` orphans them: no handler, no output, no error. Fixed by giving
+   `configure_logging` a `name` parameter (default unchanged) and having the
+   daemon configure both trees. A library that logs into the void looks exactly
+   like a library with nothing to say.
+2. **The statusline rename is a live migration, not a refactor.** The command is
+   written into `~/.claude/settings.json` as a module path string, so moving
+   `cockpit.statusline` → `fleet.statusline` strands every already-wired machine.
+   The *writer* now emits only the new path while every *recognizer* accepts both
+   (`is_our_statusline`), so a stale install reads as wired rather than broken
+   and `strip()` still removes it. **Operationally: re-run `cockpit wire` after
+   this lands**, or the statusline keeps invoking a module that no longer exists
+   — and with it goes the tty join, which is the only thing attaching hook
+   events to a window at all.
 
 **Phase B — better discovery (the real upgrade).** Add a transcript/process-scan
 discovery adapter behind the existing `Adapter` seam (c9watch pattern: read
@@ -128,8 +155,12 @@ Terminal.app to iTerm2/Ghostty via TTY→window (ccm pattern).
 The hook-handshake alternative (menubar-buddy) is a *different* safety model, not
 a clean swap; revisit only as an explicit decision.
 
-## Open: the name
+## The name
 
-`<libname>` is a placeholder. `deck/` is the device; this is the sessions/agents
-you command from it. Candidates: `crew`, `fleet`, `roster`, or the plain
-`agentsessions`/`sessions`. Pick before Phase A — it's every import path.
+**`fleet`** (Grant's call, 2026-07-22, from `crew` / `fleet` / `roster` /
+`agentsessions`). `deck/` is the device; `fleet/` is the set of running sessions
+you command from it. Short, no collision with the `Agent`/`Adapter` vocabulary
+already in the model, and it reads right at the import site:
+
+    from fleet import Session, Registry, order_sessions
+    from fleet.adapters.claude_code import ClaudeCodeAdapter

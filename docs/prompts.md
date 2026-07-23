@@ -9,7 +9,7 @@ from documentation.
 
 A key that answers a prompt is a key that types into a session you may not be
 looking at. So the deck never *guesses* what a prompt looks like — it reads the
-options off the screen ([axread.py](../src/cockpit/axread.py)) and labels each
+options off the screen ([axread.py](../src/fleet/macos/axread.py)) and labels each
 key with the screen's own words. If it can't read a menu, it shows no answer
 keys and falls back to "this session needs you, go look."
 

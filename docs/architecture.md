@@ -8,12 +8,25 @@ Code + homelab use, kept clean, launch reconsidered later only if it earns it.
 That decision is freeing: we optimize for our real workflow, never a hypothetical
 user, and skip device-coverage / API-stability / docs obligations.
 
-## The two-layer split (keep this)
+## The two-library split (keep this)
 
-- **`deck/`** — the use-case-agnostic library. Built and verified. Knows nothing
-  about Claude, terminals, or homelab. This stays clean regardless.
-- **the cockpit** — a consumer built ON `deck/`, wired to the channels below.
-  This is where all Claude/homelab knowledge lives.
+Was a two-*layer* split; became two libraries and a consumer on 2026-07-22, when
+the session engine was promoted out of the consumer into `fleet/`. See
+[session-library.md](reference/session-library.md) for the boundary and why.
+
+- **`deck/`** — the use-case-agnostic device library. Built and verified. Knows
+  nothing about Claude, terminals, or homelab. This stays clean regardless.
+- **`fleet/`** — the use-case-agnostic *session* library: what sessions exist,
+  what each is doing, and how to go to one. Knows nothing about Stream Decks,
+  tiles, or pixels. The normalized `Session` and the adapter seam below live
+  here, as do the channels (statusline, hooks) and the fusion rule.
+- **the cockpit** — a consumer built ON both, and deliberately thin: the
+  dashboard, the palette, press routing, the daemon that wires them together.
+
+The dependency runs `cockpit → {deck, fleet}` only — never between the two
+libraries, never backwards. Enforced by the one rule worth stating: nothing in
+`fleet/` may import `cockpit`, which is why `/doctor`'s probes are injected into
+the listener rather than imported by it.
 
 The moat over the incumbent apps (AgentDeck, agentsd) was never a single feature —
 they have the features. It's **multi-channel ingest unified on one surface**, and
@@ -124,7 +137,7 @@ is a thin seam, not a framework, and most of the machinery is already shared.
 
 **What is already agent-agnostic (build once, reuse for every CLI):**
 - `deck/` — the device. Knows nothing about anything.
-- the **OS layer** (`cockpit/osint.py`) — `frontmost()` (what's in focus) and
+- the **OS layer** (`fleet/macos/osint.py`) — `frontmost()` (what's in focus) and
   `activate()` (jump to an app). Focus and app-switching are identical whoever
   the agent is. This is where "know what's in focus" and "alt-tab-ish" live, and
   it's nearly all OS-provided one-liners.
@@ -140,7 +153,7 @@ is a thin seam, not a framework, and most of the machinery is already shared.
 
 **The seam is a normalized `Session`** as the daemon's currency. An adapter's one
 job is to produce Sessions; the View renders Sessions; a press routes to an
-agent-agnostic OS action. **Built 2026-07-21 in `cockpit/sessions.py`**, shaped
+agent-agnostic OS action. **Built 2026-07-21 in `fleet/sessions.py`**, shaped
 by adapter #1 rather than guessed:
 
     Session: id, agent ("claude"|"codex"|…), cwd, task,

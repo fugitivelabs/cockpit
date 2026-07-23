@@ -22,7 +22,7 @@ from deck import Slot
 
 from . import palette
 from .dashboard import ACTION_KEYS, ActionKey, Dashboard
-from .osint import activate, keystroke
+from fleet.macos.osint import activate, keystroke
 
 log = logging.getLogger("deck.cockpit.actions")
 

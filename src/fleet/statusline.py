@@ -20,7 +20,7 @@ Wired automatically by `cockpit wire`; the shape it writes is:
 
     "statusLine": {
       "type": "command",
-      "command": "PYTHONPATH=/path/to/cockpit/src /path/to/cockpit/.venv/bin/python -m cockpit.statusline"
+      "command": "PYTHONPATH=/path/to/cockpit/src /path/to/cockpit/.venv/bin/python -m fleet.statusline"
     }
 """
 

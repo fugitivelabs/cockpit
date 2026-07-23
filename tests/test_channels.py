@@ -18,11 +18,11 @@ import urllib.request
 sys.path.insert(0, os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
-from cockpit.claude_code import ClaudeCodeAdapter, parse_listing
-from cockpit.listener import HOOK_PATHS, ChannelListener
-from cockpit.registry import BLOCKED, NEEDS_INPUT, Registry, fuse_state
-from cockpit.sessions import Telemetry
-from cockpit.statusline import render
+from fleet.adapters.claude_code import ClaudeCodeAdapter, parse_listing
+from fleet.listener import HOOK_PATHS, ChannelListener
+from fleet.registry import BLOCKED, NEEDS_INPUT, Registry, fuse_state
+from fleet.sessions import Telemetry
+from fleet.statusline import render
 
 ok = 0
 fail = 0
@@ -355,7 +355,49 @@ try:
 except urllib.error.HTTPError as e:
     check("unknown GET is 404", e.code == 404)
 
+# /doctor is the library's one host-supplied seam. The probes it reports are
+# the *daemon's* TCC grants, which only the app can run — so the listener takes
+# a callable instead of importing the app's doctor module, which was the single
+# edge stopping this file from being library code. Three things to pin: absent
+# means the route still answers, present means the host's checks are served
+# verbatim, and a raising probe must not take the endpoint down with it.
+with urllib.request.urlopen(f"http://127.0.0.1:{port}/doctor", timeout=3.0) as resp:
+    doc = json.loads(resp.read())
+check("/doctor answers with no self_check injected", doc.get("checks") == [])
+
 listener.stop()
+
+probed = []
+
+
+def _fake_checks():
+    probed.append(1)
+    return [{"name": "accessibility", "status": "ok"}]
+
+
+injected = ChannelListener(Registry(), port=0, self_check=_fake_checks)
+injected.start()
+iport = injected._server.server_address[1]
+with urllib.request.urlopen(f"http://127.0.0.1:{iport}/doctor", timeout=3.0) as resp:
+    doc = json.loads(resp.read())
+check("an injected self_check is served verbatim",
+      doc.get("checks") == [{"name": "accessibility", "status": "ok"}])
+check("…and it really ran in the handler", probed == [1])
+injected.stop()
+
+
+def _exploding_checks():
+    raise RuntimeError("TCC read blew up")
+
+
+boom = ChannelListener(Registry(), port=0, self_check=_exploding_checks)
+boom.start()
+bport = boom._server.server_address[1]
+with urllib.request.urlopen(f"http://127.0.0.1:{bport}/doctor", timeout=3.0) as resp:
+    doc = json.loads(resp.read())
+check("a raising self_check degrades to no checks, not a 500",
+      doc.get("checks") == [])
+boom.stop()
 
 second = ChannelListener(Registry(), port=port)
 # Port is free again after stop(), so this proves shutdown actually released it.
@@ -437,8 +479,8 @@ check("desired() builds every endpoint from listener.HOOK_PATHS",
 d = cc.desired()
 check("statusline carries a refreshInterval",
       d["statusLine"]["refreshInterval"] == cc.REFRESH_INTERVAL_S)
-check("…and points at cockpit.statusline",
-      "cockpit.statusline" in d["statusLine"]["command"])
+check("…and points at fleet.statusline",
+      "fleet.statusline" in d["statusLine"]["command"])
 check("clearing edges are wired", "PostToolUse" in d["hooks"]
       and "PermissionDenied" in d["hooks"])
 check("capture hook is OFF by default", "PreToolUse" not in d["hooks"])
@@ -448,7 +490,7 @@ check("…and available on request", "PreToolUse" in cc.desired(capture=True)["h
 other = cc.desired(python="/opt/py/bin/python", repo="/elsewhere/streamdeck")
 check("paths are computed from the checkout, not hardcoded",
       other["statusLine"]["command"]
-      == "PYTHONPATH=/elsewhere/streamdeck /opt/py/bin/python -m cockpit.statusline",
+      == "PYTHONPATH=/elsewhere/streamdeck /opt/py/bin/python -m fleet.statusline",
       other["statusLine"]["command"])
 
 foreign = {"theme": "light",

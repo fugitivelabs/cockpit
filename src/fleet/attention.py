@@ -33,7 +33,7 @@ from typing import Optional
 
 from .sessions import Session
 
-log = logging.getLogger("deck.cockpit.attention")
+log = logging.getLogger("fleet.attention")
 
 STATE_DIR = os.path.expanduser("~/Library/Application Support/cockpit")
 STATE_FILE = os.path.join(STATE_DIR, "recency.json")

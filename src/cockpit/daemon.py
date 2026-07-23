@@ -43,11 +43,12 @@ from deck import (
 )
 from deck.surface import TOUCH_LEFT, TOUCH_RIGHT, DeviceManager
 
+from fleet import DEFAULT_PORT, ChannelListener, Registry
+from fleet.adapters.claude_code import ClaudeCodeAdapter
+
 from .actions import default_bar
-from .claude_code import ClaudeCodeAdapter
 from .dashboard import Dashboard
-from .listener import DEFAULT_PORT, ChannelListener
-from .registry import Registry
+from .doctor import daemon_self_checks
 
 log = logging.getLogger("deck.cockpit")
 
@@ -184,8 +185,14 @@ def main(argv=None) -> int:
                          "dashboard (device-only; no Terminal automation)")
     args = ap.parse_args(argv)
 
-    configure_logging(level=logging.DEBUG if args.debug else logging.INFO,
-                      logfile=args.logfile, stream=True)
+    # Two trees, because the daemon drives two libraries. Each attaches its own
+    # handlers and stops propagating, so both must be named explicitly — a tree
+    # left out keeps only its NullHandler and goes silent, which would drop
+    # every session/registry/adapter line without a word about why.
+    _log_args = dict(level=logging.DEBUG if args.debug else logging.INFO,
+                     logfile=args.logfile, stream=True)
+    configure_logging(**_log_args)                  # deck.*
+    configure_logging(**_log_args, name="fleet")    # fleet.*
     log.info("cockpit starting (pid %d)", os.getpid())
 
     lock = SingleInstance(INSTANCE_NAME)
@@ -225,8 +232,11 @@ def main(argv=None) -> int:
         if args.port:
             # A hook firing wakes the poller immediately instead of the board
             # waiting out the interval.
+            # `self_check` is the host's half of /doctor: the probes report
+            # this process's TCC grants, which only the app knows how to run.
             listener = ChannelListener(registry, port=args.port,
-                                       on_change=dashboard.poller.request_poll)
+                                       on_change=dashboard.poller.request_poll,
+                                       self_check=daemon_self_checks)
             if not listener.start():
                 # Losing the port costs live state, not the board — Stage 1
                 # behaviour is the floor, and the log already said why.

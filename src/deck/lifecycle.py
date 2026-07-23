@@ -32,20 +32,27 @@ _DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 def configure_logging(level: int = logging.INFO,
                       logfile: Optional[str] = None,
-                      stream: bool = True) -> logging.Logger:
-    """Set up the "deck" logger tree for a headless process.
+                      stream: bool = True,
+                      name: str = "deck") -> logging.Logger:
+    """Set up a top-level logger tree for a headless process.
 
     Levelled + timestamped, so a daemon under launchd is debuggable from its
     log file alone. Idempotent: repeated calls re-point handlers rather than
     stacking duplicates, so a restart in the same process never doubles lines.
 
-    - `level` — threshold for the whole `deck.*` tree.
+    - `level` — threshold for the whole `<name>.*` tree.
     - `logfile` — append structured lines here (created if missing). This is the
       LaunchAgent's `StandardErrorPath` target when run headless.
     - `stream` — also emit to stderr (useful in the foreground; harmless under
       launchd, which captures stderr to the same log).
+    - `name` — which tree to configure. Defaults to `deck`, but a host driving
+      more than one library logs them the same way by calling this once per
+      tree: handlers attach per-tree and each sets `propagate = False`, so
+      configuring `deck` and `fleet` separately is the supported shape rather
+      than a workaround. A tree left unconfigured keeps its NullHandler and
+      goes silent — which is how a moved module quietly loses its log lines.
     """
-    logger = logging.getLogger("deck")
+    logger = logging.getLogger(name)
     logger.setLevel(level)
 
     # Drop only the handlers we own, so a second call is a clean reconfigure and

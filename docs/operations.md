@@ -65,7 +65,7 @@ needed only for answering prompts from the deck.
 It writes two things into `~/.claude/settings.json` and leaves the rest of the
 file alone:
 
-- **`statusLine`** → `cockpit.statusline`, with `refreshInterval: 30`. This is
+- **`statusLine`** → `fleet.statusline`, with `refreshInterval: 30`. This is
   not cosmetic: it is the **only** channel that reports a session's tty, which
   is the sole join between a hook's `session_id` and a *window*. Without it the
   board still lists sessions but never learns any hook state. The interval

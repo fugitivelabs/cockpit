@@ -26,7 +26,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
 from deck.render import Slot, font, render, render_info          # noqa: E402
 from cockpit import palette                                       # noqa: E402
 from cockpit.dashboard import SessionTile                         # noqa: E402
-from cockpit.sessions import Session, Telemetry                   # noqa: E402
+from fleet.sessions import Session, Telemetry                   # noqa: E402
 from cockpit import actions                                       # noqa: E402
 
 SCALE, GAP, PAD = 3, 14, 18

@@ -33,9 +33,16 @@ from deck import BLANK, Component, Slot, Static, View
 from deck.anim import breathe, flash
 from deck.color import over
 
+from fleet import (
+    Adapter,
+    AttentionTracker,
+    Session,
+    label_sessions,
+    order_sessions,
+    summarize,
+)
+
 from . import palette
-from .attention import AttentionTracker
-from .sessions import Adapter, Session, label_sessions, order_sessions, summarize
 
 log = logging.getLogger("deck.cockpit.dashboard")
 
