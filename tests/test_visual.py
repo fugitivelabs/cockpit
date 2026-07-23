@@ -345,7 +345,7 @@ check("pulse does not dim the text, only the chrome",
 # tile you were in, and the row read as disjointed. Whatever focus is, adding it
 # must not move a single pixel of type.
 from cockpit.dashboard import SessionTile                          # noqa: E402
-from cockpit.sessions import Session, Telemetry                    # noqa: E402
+from fleet.sessions import Session, Telemetry                    # noqa: E402
 
 _s = Session(id="s1", agent="claude", cwd="peregrine", task="index rebuild",
              state="idle", handle="1", telemetry=Telemetry(context_pct=62))

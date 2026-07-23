@@ -24,9 +24,9 @@ from deck.anim import STEPS
 from deck.color import luminance, parse
 from cockpit import palette
 from cockpit import actions as actions_mod
-from cockpit.attention import AttentionTracker
+from fleet.attention import AttentionTracker
 from cockpit.actions import default_bar
-from cockpit.claude_code import parse_listing, parse_title
+from fleet.adapters.claude_code import parse_listing, parse_title
 from cockpit.dashboard import (
     BREATHE_LO,
     EMPTY,
@@ -37,7 +37,7 @@ from cockpit.dashboard import (
     SessionPoller,
     SessionTile,
 )
-from cockpit.sessions import (
+from fleet.sessions import (
     Session,
     label_sessions,
     order_sessions,
@@ -755,7 +755,7 @@ check("no focus (you're in Firefox) marks nothing",
 print("\n[session_info] the context-sensitive action bar")
 
 from cockpit.actions import _short_model, session_info
-from cockpit.sessions import Telemetry
+from fleet.sessions import Telemetry
 
 
 rich = replace(mk("claude:900", "peregrine", "t", "idle"),

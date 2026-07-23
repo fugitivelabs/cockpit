@@ -113,7 +113,7 @@ So the rule is now: **read the options off the screen and label the keys with
 them.** Nothing is inferred, the deck shows what the screen shows, and a screen
 with no numbered options (e.g. the free-text "tell Claude what to do
 differently" follow-up) produces no answer keys at all. See
-[axread.py](../src/cockpit/axread.py); the press-time guard re-reads and
+[axread.py](../src/fleet/macos/axread.py); the press-time guard re-reads and
 requires the identical menu to still be there.
 
 Still true, and still the reason for the conservative parser: a wrong guess is

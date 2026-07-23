@@ -9,7 +9,7 @@ import sys
 sys.path.insert(0, os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
-from cockpit.osint import Focus, parse_focus
+from fleet.macos.osint import Focus, parse_focus
 
 ok = 0
 fail = 0

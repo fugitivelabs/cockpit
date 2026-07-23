@@ -31,7 +31,7 @@ import sys
 import time
 from typing import Optional
 
-from .listener import DEFAULT_PORT
+from fleet import DEFAULT_PORT
 
 SETTINGS = os.path.expanduser("~/.claude/settings.json")
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -83,9 +83,28 @@ def _url(path: str, port: int) -> str:
     return f"http://127.0.0.1:{port}{path}"
 
 
+# The statusline command is the one piece of our wiring that names a module by
+# string, in a file we do not own — so a rename here is a live migration, not a
+# refactor. It moved to `fleet.statusline` when the session layer became its own
+# library, and a machine wired before that still names the old path.
+#
+# Every *recognizer* therefore accepts both, while the *writer* only ever emits
+# the new one. Without that, an already-wired install would read as "not wired"
+# in `cockpit doctor` and `strip()` would leave the old block behind instead of
+# removing it. `cockpit wire` rewrites a stale path to the current one.
+STATUSLINE_MODULE = "fleet.statusline"
+_STATUSLINE_MODULES = (STATUSLINE_MODULE, "cockpit.statusline")
+
+
+def is_our_statusline(command: Optional[str]) -> bool:
+    """Did we write this statusLine — at any module path we have ever used?"""
+    return any(m in (command or "") for m in _STATUSLINE_MODULES)
+
+
 def statusline_command(python: Optional[str] = None, repo: str = REPO) -> str:
     """The statusline command line for *this* checkout and interpreter."""
-    return f"PYTHONPATH={repo} {python or sys.executable} -m cockpit.statusline"
+    return (f"PYTHONPATH={repo} {python or sys.executable} "
+            f"-m {STATUSLINE_MODULE}")
 
 
 def desired(port: int = DEFAULT_PORT, capture: bool = False,
@@ -165,7 +184,7 @@ def strip(current: dict, port: int = DEFAULT_PORT) -> dict:
     """Current settings minus our wiring. The exact inverse of merge()."""
     out = json.loads(json.dumps(current))
     sl = out.get("statusLine") or {}
-    if "cockpit.statusline" in (sl.get("command") or ""):
+    if is_our_statusline(sl.get("command")):
         out.pop("statusLine", None)
     hooks = out.get("hooks")
     if isinstance(hooks, dict):
@@ -204,7 +223,7 @@ def write(data: dict, path: str = SETTINGS) -> None:
 def replaced_statusline(current: dict) -> Optional[str]:
     """A foreign statusLine we are about to overwrite, if any."""
     cmd = (current.get("statusLine") or {}).get("command") or ""
-    return cmd if (cmd and "cockpit.statusline" not in cmd) else None
+    return cmd if (cmd and not is_our_statusline(cmd)) else None
 
 
 def apply(port: int = DEFAULT_PORT, capture: bool = False,

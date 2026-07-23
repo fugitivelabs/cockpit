@@ -126,7 +126,11 @@ def check_settings() -> list[Check]:
     out = []
 
     sl = cfg.get("statusLine") or {}
-    if "cockpit.statusline" not in (sl.get("command") or ""):
+    # Shared recognizer rather than a second copy of the string: it has to
+    # accept the pre-`fleet` module path too, and two copies of that rule would
+    # drift into doctor reporting "not wired" on a working install.
+    from .claude_config import is_our_statusline
+    if not is_our_statusline(sl.get("command")):
         out.append(Check("statusline → cockpit", BAD, "not wired",
                          "Without it, hook events cannot be joined to a window "
                          "at all — it is the only channel that reports a tty."))

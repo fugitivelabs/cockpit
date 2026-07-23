@@ -28,7 +28,7 @@ import subprocess
 from dataclasses import dataclass
 from typing import Optional
 
-log = logging.getLogger("deck.cockpit.osint")
+log = logging.getLogger("fleet.osint")
 
 # One System Events round-trip. Window title is attempted but never fatal.
 # Note: AppleScript, not Python — fields are joined with the `tab` keyword (not
@@ -105,7 +105,7 @@ def keystroke(keys: str, timeout: float = 5.0) -> bool:
     So it is deliberately not exported for casual use: the only caller is the
     permission bar in `actions.py`, which re-verifies focus immediately before
     calling and refuses if anything moved. Requires Accessibility (see
-    ../../docs/operations.md); `cockpit doctor` reports whether the daemon has it.
+    ../../../docs/operations.md); `cockpit doctor` reports whether the daemon has it.
     """
     # `keystroke` sends the characters as typed input. Quotes are escaped
     # because the string is interpolated into AppleScript source.

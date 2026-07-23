@@ -53,14 +53,21 @@ Quit Elgato's app if it's installed: two writers fight over the display.
 ```
 src/deck/       the device library — diffing, caching, input, reconnect,
                 lifecycle. Knows nothing about Claude. Shareable on its own.
-src/cockpit/    the consumer — sessions, channels, the dashboard, actions.
-tests/          518 assertions, no hardware required
+src/fleet/      the session library — discover the agent sessions running on
+                this machine, fuse their state, go to one. Knows nothing about
+                Stream Decks. Shareable on its own.
+src/cockpit/    the glue — the dashboard, the palette, press routing, the daemon.
+tests/          522 assertions, no hardware required
 launchd/        the LaunchAgent and the `cockpit` management CLI
 docs/           architecture, operations, prompts, roadmap
 ```
 
-That split is load-bearing, not cosmetic: `deck/` stays use-case-agnostic so
-another agent CLI becomes an adapter rather than a rewrite.
+Two libraries and a thin consumer, and the shape is load-bearing rather than
+cosmetic. `deck/` never learns what a session is; `fleet/` never learns what a
+pixel is; the dependency only ever runs `cockpit → {deck, fleet}` and never
+between the two or backwards. That is what makes another agent CLI an adapter
+inside `fleet/` rather than a rewrite, and another *surface* for `fleet/` — a
+TUI, a menubar — a different consumer rather than a fork.
 
 ## Docs
 

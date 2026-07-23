@@ -72,9 +72,9 @@ input, and this stage only reads.
 
 **The three modules, which are the adapter seam made real:**
 
-- `cockpit/sessions.py` — the normalized `Session`, the `Adapter` protocol, and
+- `fleet/sessions.py` — the normalized `Session`, the `Adapter` protocol, and
   the ordering + labeling rules. Pure; no I/O, no device.
-- `cockpit/claude_code.py` — adapter #1. Terminal titles in, Sessions out, plus
+- `fleet/adapters/claude_code.py` — adapter #1. Terminal titles in, Sessions out, plus
   `focus()`. Everything Claude-specific about discovery is in this one file.
 - `cockpit/dashboard.py` — `SessionTile` / `SessionPoller` / `Dashboard`. The
   daemon's `build_view()` placeholder is gone; `--heartbeat` keeps the Stage 0.5
@@ -144,8 +144,8 @@ event cannot reach a tile at all. Two traps found live:
 - **An idle session never re-runs its statusline**, so its tty never registers
   and hooks for it land nowhere. Fixed with `refreshInterval: 30`.
 
-**Components:** `cockpit/registry.py` (channel state + `fuse_state`),
-`cockpit/listener.py` (loopback HTTP endpoint), `cockpit/statusline.py` (the
+**Components:** `fleet/registry.py` (channel state + `fuse_state`),
+`fleet/listener.py` (loopback HTTP endpoint), `fleet/statusline.py` (the
 statusline command), tty join in `claude_code.py`. 59 assertions in
 [tests/test_channels.py](../tests/).
 
@@ -180,7 +180,7 @@ Option 2 is **"No"** on one and **a permanent permission grant** on another, and
 the count varies. A fixed bar sends the same digit to both.
 
 **So the keys are read off the screen instead** — see the superseded-shape note
-in [design.md](design.md). `cockpit/axread.py` reads the window's visible text
+in [design.md](design.md). `fleet/macos/axread.py` reads the window's visible text
 over the Accessibility API and parses the actual options; the keys are labelled
 with the screen's own words. No menu on screen → no answer keys, which is what
 makes the free-text "tell Claude what to do differently" follow-up safe.

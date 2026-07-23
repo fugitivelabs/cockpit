@@ -17,8 +17,8 @@ sys.path.insert(0, os.path.join(
 from cockpit import actions as actions_mod
 from cockpit import palette
 from cockpit.actions import ACTION_BG, answer_keys
-from cockpit.axread import Prompt, parse_prompt, prompt_ui_present
-from cockpit.sessions import Session
+from fleet.macos.axread import Prompt, parse_prompt, prompt_ui_present
+from fleet.sessions import Session
 
 ok = 0
 fail = 0

@@ -12,12 +12,16 @@ license = { text = "MIT" }
 authors = [{ name = "Grant Fowler" }]
 keywords = ["stream deck", "elgato", "claude code", "control surface", "macos"]
 
-# Two packages, and the split is deliberate rather than incidental:
+# Three packages, and the split is deliberate rather than incidental:
 #   deck    — use-case-agnostic device layer. Knows nothing about Claude,
 #             terminals, or sessions. Shareable on its own.
-#   cockpit — everything that knows what a session is.
+#   fleet   — observe and control the agent-CLI sessions on this machine.
+#             Knows nothing about Stream Decks. Shareable on its own.
+#   cockpit — the glue: wires one to the other, and nothing else belongs here.
 # Keeping them siblings is what stops agent-specific logic leaking into the
-# device layer; see docs/architecture.md.
+# device layer (or pixels leaking into the session layer); the dependency only
+# ever runs cockpit -> {deck, fleet}, never between the two libraries or
+# backwards. See docs/architecture.md and docs/reference/session-library.md.
 dependencies = [
     "streamdeck==0.9.8",
     "pillow>=12,<13",
@@ -34,7 +38,7 @@ cockpit-wire = "cockpit.claude_config:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["deck*", "cockpit*"]
+include = ["deck*", "fleet*", "cockpit*"]
 
 [tool.setuptools.package-data]
 "*" = ["*.md"]

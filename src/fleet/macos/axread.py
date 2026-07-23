@@ -1,7 +1,7 @@
 """Reading a terminal's visible text over the Accessibility API.
 
 This is the capability that dissolves the oldest constraint in this project.
-[design.md](../../docs/design.md) concluded that hooks cannot detect a prompt's *shape*,
+[design.md](../../../docs/design.md) concluded that hooks cannot detect a prompt's *shape*,
 so accept/reject keys were unsafe — a key labelled "Yes" might send `1` into a
 menu where `1` means something else entirely. That conclusion was right about
 hooks and wrong about the ceiling: the screen itself is readable, and a prompt
@@ -32,7 +32,7 @@ through Terminal scripting before reading, rather than from matching a window
 **title** (which mutates with the spinner glyph several times a second and made
 every read fail — see `visible_text`).
 
-Needs the Accessibility grant; `cockpit doctor` reports it, and ../../docs/operations.md
+Needs the Accessibility grant; `cockpit doctor` reports it, and ../../../docs/operations.md
 documents granting it. Every function degrades to None when it is missing.
 """
 
@@ -43,7 +43,7 @@ import re
 from dataclasses import dataclass
 from typing import Optional
 
-log = logging.getLogger("deck.cockpit.axread")
+log = logging.getLogger("fleet.axread")
 
 try:                                    # pragma: no cover - import shape
     from ApplicationServices import (

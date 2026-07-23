@@ -50,7 +50,7 @@ from typing import Optional
 
 from .sessions import Telemetry
 
-log = logging.getLogger("deck.cockpit.registry")
+log = logging.getLogger("fleet.registry")
 
 # A permission prompt can legitimately sit unanswered for a long time, so this
 # is a backstop against a *missed* clearing event, not a timeout on attention.

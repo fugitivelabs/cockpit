@@ -33,7 +33,7 @@ from typing import Optional
 from .registry import BLOCKED, NEEDS_INPUT, Registry
 from .sessions import Telemetry
 
-log = logging.getLogger("deck.cockpit.listener")
+log = logging.getLogger("fleet.listener")
 
 DEFAULT_PORT = 8787
 BIND_HOST = "127.0.0.1"          # loopback only; never a listening socket on a LAN
@@ -92,6 +92,13 @@ def _telemetry(payload: dict) -> Optional[Telemetry]:
 class _Handler(BaseHTTPRequestHandler):
     registry: Registry = None        # injected by serve()
     on_change = None                 # optional callback: something changed
+    # Optional `() -> list[dict]` the host supplies to answer /doctor. The
+    # library cannot run these itself: what /doctor reports is the *daemon's*
+    # TCC grants, which is host knowledge, and importing the host's doctor
+    # module from here would point the dependency backwards (lib -> app) and
+    # was the single edge stopping this file from being library code at all.
+    # Absent => /doctor still answers, with no checks.
+    self_check = None
 
     # Silence BaseHTTPRequestHandler's stderr access log; we have real logging.
     def log_message(self, fmt, *args):
@@ -112,13 +119,15 @@ class _Handler(BaseHTTPRequestHandler):
         if self.path == "/doctor":
             # The daemon's OWN permissions, which are not the same as the ones
             # your terminal has — macOS grants per responsible process, and the
-            # LaunchAgent has no Terminal parent to inherit from.
-            from .doctor import daemon_self_checks
-            try:
-                checks = daemon_self_checks()
-            except Exception:
-                log.exception("self-check failed")
-                checks = []
+            # LaunchAgent has no Terminal parent to inherit from. The probes
+            # themselves belong to the host; we only serve what it injected.
+            checks = []
+            if callable(self.self_check):
+                try:
+                    checks = self.self_check()
+                except Exception:
+                    log.exception("self-check failed")
+                    checks = []
             self._reply(200, {"sessions": len(self.registry), "checks": checks})
             return
         if self.path == "/sessions":
@@ -219,10 +228,11 @@ class ChannelListener:
     """Owns the HTTP server thread. Start it, forget it, stop it on shutdown."""
 
     def __init__(self, registry: Registry, port: int = DEFAULT_PORT,
-                 on_change=None):
+                 on_change=None, self_check=None):
         self.registry = registry
         self.port = port
         self._on_change = on_change
+        self._self_check = self_check
         self._server: Optional[ThreadingHTTPServer] = None
         self._thread: Optional[threading.Thread] = None
 
@@ -233,8 +243,11 @@ class ChannelListener:
         trade: the dashboard works without this channel, just with less state.
         """
         handler = type("_BoundHandler", (_Handler,),
-                       {"registry": self.registry, "on_change": staticmethod(self._on_change)
-                        if callable(self._on_change) else None})
+                       {"registry": self.registry,
+                        "on_change": staticmethod(self._on_change)
+                        if callable(self._on_change) else None,
+                        "self_check": staticmethod(self._self_check)
+                        if callable(self._self_check) else None})
         try:
             self._server = ThreadingHTTPServer((BIND_HOST, self.port), handler)
         except OSError as e:
