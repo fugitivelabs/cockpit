@@ -115,8 +115,18 @@ class Slot:
     # marker must NOT disturb the text: `rule` pushes the label down by its own
     # height, so toggling it makes the title jump between two positions. `foot`
     # costs the label nothing, because the label is anchored to the top.
+    #
+    # Three values, not two. None is "no band"; a colour draws one; the EMPTY
+    # STRING reserves its space and draws nothing. The empty case exists because
+    # a `bar` stacks above the foot — so a band that comes and goes would shove
+    # the meter up and down by its own height every time it appeared. A caller
+    # that toggles a foot passes "" for the off state and the meter holds still.
     foot: Optional[str] = None
     foot_h: int = 6
+    # Reverse-rounded top corners: the band flares UP the left and right edges
+    # and curves back down to its own top edge, rather than having its corners
+    # shaved off. See `_foot_shoulders`. 0 is a plain rectangle.
+    foot_r: int = 0
     frame: Optional[str] = None        # full perimeter — a distinct key *class*
     frame_w: int = 3
     icon: str = ""                     # a drawn glyph; see ICONS
@@ -252,6 +262,40 @@ def draw_icon(img: Image.Image, name: str, cx: float, cy: float,
     ox = cx - (ink[0] + ink[2]) / 2.0
     oy = cy - (ink[1] + ink[3]) / 2.0
     img.paste(color, (int(round(ox)), int(round(oy))), flat)
+
+
+def _foot_shoulders(img: Image.Image, y0: int, r: int, color: str) -> None:
+    """Flare a bottom band up both edges with concave corners.
+
+    An ordinary rounded corner is convex: it takes mass away from the ends of
+    the band. Inverted, the curve is tangent to the side wall instead — the band
+    runs `r` px further up the extreme left and right edges and sweeps back down
+    to its own top edge, so the shape gains mass where a rounded one loses it.
+
+    Drawn as the *complement* of a quarter disc: fill the corner square, then
+    punch out a circle centred on the band's top corner. Supersampled and
+    downsampled for the same reason icons are — PIL will not antialias a curve,
+    and a stair-stepped fillet at 8 px reads as a chipped edge.
+    """
+    ss = 4
+    w = img.width
+    r = max(0, min(r, y0))
+    if r == 0:
+        return
+    rr, ww = r * ss, w * ss
+    mask = Image.new("L", (ww, rr), 0)
+    m = ImageDraw.Draw(mask)
+    m.rectangle([0, 0, rr - 1, rr - 1], fill=255)
+    # The disc is centred on the band's top-left corner, which sits at the
+    # BOTTOM-right of this strip — what survives is the concave remainder.
+    m.ellipse([0, -rr, 2 * rr, rr], fill=0)
+    # Mirrored rather than drawn twice: two independently-drawn arcs land half a
+    # pixel apart, and on an otherwise symmetric key one shoulder reading a shade
+    # heavier than the other is exactly the kind of thing the eye picks up
+    # without being able to say why.
+    mask.paste(mask.crop((0, 0, rr, rr)).transpose(Image.FLIP_LEFT_RIGHT),
+               (ww - rr, 0))
+    img.paste(color, (0, y0 - r), mask.resize((w, r), Image.LANCZOS))
 
 
 def ellipsize(d: ImageDraw.ImageDraw, text: str, f, max_w: float,
@@ -482,7 +526,11 @@ def render(deck, slot: Slot) -> Image.Image:
         # reading as a fifth line of content. It stacks *above* `foot` when both
         # are present, so the two never overdraw each other.
         frac = max(0.0, min(1.0, slot.bar))
-        y1 = h - (slot.foot_h if slot.foot else 0)
+        # The shoulders count as part of the foot's height, so the meter clears
+        # them entirely. Letting it run underneath instead would put white over
+        # its first and last few pixels — and since it fills from the left, a
+        # low reading would be hidden exactly where it is hardest to spare.
+        y1 = h - (slot.foot_h + slot.foot_r if slot.foot is not None else 0)
         y0 = y1 - 6
         d.rectangle([0, y0, w, y1], fill=_dim(slot.bar_track, slot.pulse))
         if frac > 0:
@@ -495,6 +543,8 @@ def render(deck, slot: Slot) -> Image.Image:
     if slot.foot:
         # Structural, like `rule` and `frame` — never pulsed.
         d.rectangle([0, h - slot.foot_h, w, h], fill=slot.foot)
+        if slot.foot_r:
+            _foot_shoulders(img, h - slot.foot_h, slot.foot_r, slot.foot)
 
     if slot.frame:
         # Drawn last so it is never clipped by the field or the rule. A full

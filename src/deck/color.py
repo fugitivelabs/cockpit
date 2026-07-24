@@ -117,5 +117,60 @@ def readable_on(bg: str, light: str = "#FFFFFF", dark: str = "#000000") -> str:
     return dark if luminance(bg) > 0.5 else light
 
 
+def separation(a: str, b: str) -> float:
+    """How far apart two colours are, 0..441 (RGB Euclidean).
+
+    Distance rather than a luminance difference, because luminance alone calls
+    red on blue a collision — 0.44 against 0.38, nearly identical — when it is
+    one of the clearest pairings there is, and misses red on red, which is no
+    pairing at all. Crude next to a real perceptual metric, and right about the
+    only question a key ever asks: can these two be told apart at arm's length?
+    """
+    try:
+        return sum((x - y) ** 2 for x, y in zip(parse(a), parse(b))) ** 0.5
+    except (ValueError, TypeError, AttributeError):
+        return 0.0
+
+
+# Below this, two colours are not reliably tellable apart on a 96 px key at
+# arm's length. Calibrated on the pairs that actually shipped: amber on amber
+# (17) and red on red (29) are invisible; red on blue (222) and amber on slate
+# (200) are fine.
+COLLIDE = 96.0
+
+
+def distinct(color: str, *avoid: str, threshold: float = COLLIDE) -> str:
+    """Nudge `color` until it can be told apart from every colour in `avoid`.
+
+    The recurring problem this exists for: a consumer picks a colour to *mean*
+    something, then draws it on a surface it does not control — a flooded tile,
+    a key that already spends that hue on something else — and the meaning is
+    lost because the mark and its background are the same colour. Choosing per
+    background by hand does not scale; it is a table that grows as
+    states × marks and rots the first time either side moves.
+
+    So the hue is kept and only its brightness moves, light before dark. Light
+    first because a surface that collides with a warm mark is usually already
+    dark-shaded somewhere — a dimmed variant of itself, a track, an ink — so the
+    dark direction tends to be the occupied one. Pass every colour the result
+    has to survive, not just the background: a mark that clears its field but
+    lands on the neighbouring mark has solved nothing.
+
+    Returns the first candidate clearing `threshold` against all of `avoid`, or
+    failing that the one that comes closest to clearing it. Knows nothing about
+    what any of the colours mean, which is the point — the caller owns the
+    meanings, this owns the arithmetic.
+    """
+    if not avoid:
+        return color
+    tries = (color, mix(color, "#FFFFFF", 0.5), mix(color, "#000000", 0.5))
+    clearance = lambda c: min(separation(c, a) for a in avoid)
+    for c in tries:
+        if clearance(c) >= threshold:
+            return c
+    return max(tries, key=clearance)
+
+
 __all__ = ["parse", "to_hex", "lighten", "darken", "scale", "mix", "over",
-           "luminance", "readable_on", "RGB"]
+           "luminance", "readable_on", "separation", "distinct", "COLLIDE",
+           "RGB"]

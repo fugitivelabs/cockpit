@@ -164,11 +164,12 @@ def session_info(dashboard: Dashboard) -> dict:
         pct = s.telemetry.context_pct if (s and s.telemetry) else None
         if pct is None:
             return _furniture("—", "context", "info:ctx")
-        # Amber past 80% — "approaching a limit" is what caution means, the one
-        # cross-cutting reuse of a state hue the palette allows.
+        # Amber past 50%, red past 75% — the same ramp the session tile uses, so
+        # the info key and the tile it describes never disagree about how close
+        # to the limit a session is.
         return _furniture(f"{int(pct)}%", "context", f"info:ctx:{int(pct)}",
                           bar=pct / 100.0,
-                          bar_color=palette.meter_color(pct / 100.0))
+                          bar_color=palette.context_color(pct))
 
     def cost_slot() -> Slot:
         s = focused()
