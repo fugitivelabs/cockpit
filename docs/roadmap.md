@@ -208,10 +208,16 @@ and if we're reading the screen, the real label is right there.
 
 ## Stage 4 — the rest
 
-- Firefox: the [mozeidon](https://github.com/egovelox/mozeidon) evaluation from
-  [firefox-tabs.md](reference/firefox-tabs.md). Note this assumed a Stream Deck *plugin*
-  consuming it; with a bespoke daemon we'd talk to the native host directly, which
-  is if anything simpler.
+- ~~Firefox: the [mozeidon](https://github.com/egovelox/mozeidon) evaluation.~~
+  **Not needed, and built instead 2026-07-23.** The bridge was only ever
+  required because [firefox-tabs.md](reference/firefox-tabs.md) evaluated
+  AppleScript, which is permanently dead for Firefox tabs. The Accessibility
+  API is a different surface and answers it outright: `AXTabGroup` children are
+  the tabs, with titles, selected state and `AXPress`, plus `AXRaise` on
+  windows — 0.045s for a 129-tab window, no extension, no native host. The
+  action bar now becomes **next window / first tab / last tab** whenever
+  Firefox is frontmost. Still open only if *per-tab URLs* are ever wanted:
+  that is the one thing Accessibility does not expose.
 - Info bar as an aggregate display ("2 waiting"). Full-panel repaints only, which
   suits a low-frequency summary fine.
 - Touch points for paging, if the ten-sessions-into-six-slots problem still bites.

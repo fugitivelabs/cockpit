@@ -149,6 +149,15 @@ class ClaudeProcessAdapter:
         self._registry = registry
         self._root = projects_root
         self._windows: dict[str, str] = {}       # tty -> window id, last poll
+        # See the same field on ClaudeCodeAdapter: `focused()` has to read which
+        # *app* is in front in order to answer which *session* is, and that
+        # broader fact is worth keeping rather than discarding.
+        self._last_focus = None
+
+    @property
+    def last_focus(self):
+        """The `Focus` seen at the last `focused()` call, or None. Poll-fresh."""
+        return self._last_focus
 
     def sessions(self) -> list[Session]:
         """Every Claude Code session the OS can see. Never raises."""
@@ -237,6 +246,7 @@ class ClaudeProcessAdapter:
         """The handle (tty) of the session you are looking at, or None."""
         from ..macos.osint import frontmost
         front = frontmost()
+        self._last_focus = front
         if front is None or front.bundle_id != TERMINAL_BUNDLE:
             return None
         wid = self._front_window_id()

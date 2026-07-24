@@ -1,5 +1,29 @@
 # Firefox tab control
 
+> **Largely superseded, 2026-07-23 — read this box before acting on anything
+> below.** Everything here evaluated **AppleScript**, and its conclusion about
+> AppleScript is correct and still stands. It did not evaluate the
+> **Accessibility API**, which is an unrelated surface and turns out to answer
+> the question directly: Firefox exposes an `AXTabGroup` whose children are the
+> individual tabs, each carrying its title, its selected state, and an `AXPress`
+> action, plus `AXRaise` on windows. Measured on a real 129-tab window,
+> enumerating every tab costs **0.045s** — cheaper than one `frontmost()` call.
+>
+> So enumeration and switching need **no extension, no native messaging host,
+> and no third-party dependency**. Built in [`fleet/macos/axapp.py`](../../src/fleet/macos/axapp.py);
+> the browser action bar in `cockpit/actions.py` consumes it.
+>
+> **What survives:** the one thing Accessibility does *not* expose is a
+> **per-tab URL** (`AXURL` on a tab is `None`); only the active tab's document
+> URL is readable, via the window's `AXWebArea`. If per-tab URLs are ever
+> needed — a "search my tabs" key, say — the native-host bridge below is still
+> the answer, and the research on signing, manifest paths and mozeidon is still
+> the right starting point.
+>
+> Kept in full because the AppleScript findings remain true and the bridge
+> architecture remains the fallback. Do not restart the mozeidon evaluation for
+> title-and-switch use cases.
+
 Researched 2026-07-19, against Firefox **150.0.2** as installed here.
 
 The problem: a Stream Deck plugin wants to enumerate open Firefox tabs (titles +
@@ -127,6 +151,11 @@ should write the manifest itself on first run (it knows its own install path) an
 surface a clear "extension not connected" state on the key.
 
 ## Recommendation
+
+**Superseded for enumeration and switching — see the box at the top.** Those are
+built on the Accessibility API and need none of what follows. The recommendation
+below now applies only if **per-tab URLs** become necessary, which is the single
+capability Accessibility cannot supply.
 
 Evaluate **contributing a Stream Deck consumer to mozeidon** before building
 anything. The hard parts — signed extension, correct macOS manifest path,

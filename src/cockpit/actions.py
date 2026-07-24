@@ -18,11 +18,13 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from deck import Slot
+from deck import BLANK, Slot, Static
+
+from fleet.macos import axapp
+from fleet.macos.osint import activate, frontmost, keystroke
 
 from . import palette
 from .dashboard import ACTION_KEYS, ActionKey, Dashboard
-from fleet.macos.osint import activate, keystroke
 
 log = logging.getLogger("deck.cockpit.actions")
 
@@ -364,6 +366,74 @@ def _answer_key(dashboard: Dashboard, digit, label: str, prompt) -> ActionKey:
     return ActionKey(slot, run, name=f"answer:{digit or 'esc'}")
 
 
+FIREFOX_BUNDLE = "org.mozilla.firefox"
+
+
+def _app_action(bundle_id: str, name: str, act) -> "callable":
+    """Wrap an app action in the "is that app still in front" guard.
+
+    The bar was painted from a poll that may be two seconds old, so the app
+    could have changed under the press. Every action here therefore re-reads
+    `frontmost()` at press time and refuses unless it is still the app the key
+    was drawn for.
+
+    Milder than the answer-key guard, and deliberately so — the failure here is
+    "a tab switched in the wrong browser", not "a tool call was approved in the
+    wrong session" — but it costs one osascript on a press nobody makes often,
+    and it keeps the rule uniform: no key acts on an app it has not just
+    confirmed.
+    """
+    def run(long: bool) -> None:
+        front = frontmost()
+        if front is None or front.bundle_id != bundle_id:
+            log.info("%s: %s is no longer frontmost — ignored", name, bundle_id)
+            return
+        if not act(front.pid):
+            log.info("%s: nothing to do", name)
+
+    return run
+
+
+def browser_keys(dashboard: Dashboard) -> dict:
+    """The action bar while a browser is in front.
+
+    The three moves Grant actually makes in Firefox, and nothing else. The
+    session board above is unchanged and still carries every "take me back to a
+    session" press, so this row does not spend a slot on one.
+
+    All three go through the Accessibility tree rather than synthesized
+    shortcuts — see `fleet/macos/axapp.py` for why that is both safer and more
+    capable than Cmd-` / Cmd-1 / Cmd-9.
+
+    The fourth key is deliberately blank (Grant's call, 2026-07-23): the first
+    three are known-wanted, the fourth is not, and a key invented to fill a hole
+    is how a control surface accretes things nobody presses. It stays empty
+    until use names it.
+    """
+    keys = list(ACTION_KEYS)
+    return {
+        keys[0]: ActionKey(
+            _furniture("next", "window", "ff:nextwin"),
+            _app_action(FIREFOX_BUNDLE, "next window", axapp.focus_next_window),
+            name="ff-next-window"),
+        keys[1]: ActionKey(
+            _furniture("first", "tab", "ff:firsttab"),
+            _app_action(FIREFOX_BUNDLE, "first tab",
+                        lambda pid: axapp.select_tab(pid, "first")),
+            name="ff-first-tab"),
+        keys[2]: ActionKey(
+            _furniture("last", "tab", "ff:lasttab"),
+            _app_action(FIREFOX_BUNDLE, "last tab",
+                        lambda pid: axapp.select_tab(pid, "last")),
+            name="ff-last-tab"),
+        # Not an ActionKey: an empty slot is not a disabled key. A dimmed
+        # ActionKey would still read as "something that could work later",
+        # which is precisely the wrong signal for a slot we have not decided
+        # about yet.
+        keys[3]: Static(BLANK),
+    }
+
+
 def default_bar(dashboard: Dashboard, surface) -> "callable":
     """The action bar as a *provider* — it depends on what you're looking at.
 
@@ -379,9 +449,18 @@ def default_bar(dashboard: Dashboard, surface) -> "callable":
     offering a key that cannot fire.
     """
     info = session_info(dashboard)
-    firefox = {list(ACTION_KEYS)[3]: jump_to_app("Firefox", "org.mozilla.firefox")}
+    firefox = {list(ACTION_KEYS)[3]: jump_to_app("Firefox", FIREFOX_BUNDLE)}
+    browser = browser_keys(dashboard)
 
     def provider() -> dict:
+        # In Firefox the whole session-shaped bar is meaningless: there is no
+        # focused session, so model/context/cost are three dashes, and the
+        # Firefox key would offer to take you to the app you are already in.
+        # Swap in the browser row instead. Checked first because it is the one
+        # case where none of the keys below can apply — a prompt belongs to a
+        # session, and you are not in one.
+        if dashboard.in_app(FIREFOX_BUNDLE):
+            return dict(browser)
         # Answer keys win when a menu is genuinely on screen; otherwise the
         # info keys. Note the fallback is info, never a disabled accept/reject —
         # a key that looks like it answers a prompt when none is showing is the
