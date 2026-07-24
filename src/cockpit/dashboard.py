@@ -165,14 +165,20 @@ class SessionTile(Component):
             # Focus is white mass along the bottom, never a tint and never a
             # top cap — see palette.FOCUS. Anchoring it to the bottom edge is
             # what keeps the project name at the same height on every tile.
-            foot=palette.FOCUS if self.focused else None,
+            # "" rather than None when unfocused: the space stays reserved, so
+            # the meter above it does not jump when focus arrives or leaves.
+            foot=palette.FOCUS if self.focused else "",
             foot_h=palette.FOCUS_FOOT_H,
+            foot_r=palette.FOCUS_FOOT_R,
             bar=None if ctx is None else ctx / 100.0,
-            # On a flooded field the old meter colours vanish, so the gauge is
-            # drawn in the tile's own ink instead — it reads on red, amber, blue
-            # and slate alike without needing a colour per state.
-            bar_color=palette.CAUTION if (ctx or 0) >= palette.CONTEXT_WARN_PCT
-            else over(st.ink, 0.55, st.field),
+            # Below the first threshold the gauge is furniture, so it is drawn
+            # in the tile's own ink — on a flooded field a meter colour vanishes,
+            # while ink reads on red, amber, blue and slate alike. Past 50% it
+            # takes the caution/warning ramp, which palette.context_color keeps
+            # distinct from whatever the tile is flooded with.
+            bar_color=palette.context_color(ctx or 0.0,
+                                            base=over(st.ink, 0.55, st.field),
+                                            field=st.field),
             bar_track=over("#000000", 0.28, st.field),
             pulse=pulse,
             # Slot identity is the session, not the position — so a tile that

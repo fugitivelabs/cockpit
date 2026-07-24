@@ -726,7 +726,12 @@ check("the focused tile is marked", tiles["10"].focused is True)
 check("…and only that one", tiles["20"].focused is False)
 check("focus is a white bar, and only the focused tile has one",
       tiles["10"].render().foot == palette.FOCUS
-      and tiles["20"].render().foot is None)
+      and not tiles["20"].render().foot)
+check("…but the unfocused tile still RESERVES the band's space, so the meter "
+      "above it does not jump when focus arrives",
+      tiles["20"].render().foot == ""
+      and tiles["20"].render().foot_h == tiles["10"].render().foot_h
+      and tiles["20"].render().foot_r == tiles["10"].render().foot_r)
 check("…thick enough to read as a block, not a line",
       tiles["10"].render().foot_h >= 12, tiles["10"].render().foot_h)
 check("…anchored to the BOTTOM, so it cannot displace the project name",
@@ -775,7 +780,11 @@ check("key4 shows the model, shortened",
       bar[4].render().label == "Opus 4.8", bar[4].render().label)
 check("key5 shows context percent", bar[5].render().label == "96%")
 check("…as a bar", bar[5].render().bar == 0.96)
-check("…amber past 80%", bar[5].render().bar_color == palette.CAUTION)
+check("…red past 75%", bar[5].render().bar_color == palette.WARNING)
+check("…amber between 50 and 75",
+      palette.context_color(60.0) == palette.CAUTION
+      and palette.context_color(74.9) == palette.CAUTION)
+check("…and quiet below 50", palette.context_color(49.9) == palette.METER)
 check("key6 shows cost", bar[6].render().label == "$38.83", bar[6].render().label)
 check("key7 is always Firefox", bar[7].render().label == "Firefox")
 check("info keys are inert — they describe, they don't act",

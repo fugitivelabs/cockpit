@@ -85,7 +85,8 @@ to stand up:**
 - Caveat: statusline is hidden briefly during autocomplete and permission prompts.
 
 **This is the single most valuable channel** and the one the incumbents mostly
-don't tap. It is `used_percentage` that lets a key go amber at 80% context.
+don't tap. It is `used_percentage` that lets a key go amber at 50% context and
+red at 75%.
 
 ### Hooks — event-driven state
 

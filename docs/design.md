@@ -193,12 +193,23 @@ The label is anchored to the top of the tile, so a bottom band buys the same
 white for free. No frame either, for the same reason: an inset perimeter shifts
 the text sideways by its own width. **Focus must be addable and removable
 without anything else on the tile twitching**, which is now a test —
-`test_visual.py` renders a tile focused and unfocused and asserts the entire
-text area is pixel-identical.
+`test_visual.py` renders a tile focused and unfocused and asserts that
+everything above the band is pixel-identical.
 
 That is what `foot` exists for in `Slot`: the mirror of `rule`, for markers that
 must not disturb the type. The context meter stacks above it rather than under
-it, so the two never overdraw.
+it, so the two never overdraw. An unfocused tile passes `foot=""` — the space is
+reserved and nothing is drawn — because otherwise the band's absence pulls the
+meter down by the band's whole height, and the gauge jumps every time you move
+between sessions. Reserving it is what lets the "nothing above it moves" test be
+about the meter as well as the type.
+
+The band's top corners are rounded the **wrong way**: concave fillets that flare
+the white up the left and right edges rather than shaving it off them. A normal
+radius takes mass away exactly where a bottom band has least of it — at the ends
+— and mass is the entire argument for the band. The flare also stops the band
+reading as a second horizon under the meter: it looks like part of the tile
+rather than a strip laid on top of it.
 
 Related, and a genuine bug: `pulse` used to dim *all* chrome, so a white focus
 frame turned grey whenever the tile under it happened to breathe — the one tile
@@ -291,6 +302,27 @@ colour toward white and how to make a number wobble; what any of it *signifies*
 is the consumer's business. That is the split
 [architecture.md](architecture.md) calls load-bearing, and a palette in the
 library would be the first thing to break it.
+
+**Two problems keep coming back, and both now have a library answer.** They are
+worth naming because each one turned a four-line visual tweak into an afternoon
+before it was solved once:
+
+- **A mark vanishing into what it is drawn on.** Since the tile field IS the
+  state colour, any mark carrying its own meaning — a meter's ramp, a chip, a
+  badge — can land on a field of the same hue and say nothing. `distinct()` in
+  [color.py](../src/deck/color.py) resolves it: keep the hue, move the
+  brightness, light before dark. **Pass everything the mark must survive, not
+  just the background** — the meter's own sub-threshold colour swallowed a
+  lightened red on `blocked` exactly as thoroughly as the field did.
+- **Toggled chrome shoving other chrome.** `foot` stacks under `bar`, so a band
+  that appears on focus moves the meter by its own height. Any `Slot` marker a
+  caller turns on and off needs a *reserve* state — `foot=""` draws nothing and
+  keeps the space — or the tile twitches every time state changes. The rule is
+  the same one that moved focus off the top edge in the first place: **whatever
+  a marker means, changing it must move nothing else.**
+
+If a third of these shows up, it belongs in `deck/` too, and the test belongs in
+the mechanism tier of `test_visual.py` next to the other two.
 
 ### The info bar reports, or it quotes
 

@@ -73,6 +73,28 @@ check("readable_on picks dark text on a light field",
 check("readable_on picks light text on a dark field",
       color.readable_on("#0B0C0E") == "#FFFFFF")
 
+# separation() / distinct() — the mechanism behind "a mark must not vanish into
+# what it is drawn on". No meanings here: it is told what to avoid and does not
+# ask why. The palette supplies the why; see context_color.
+check("separation calls red on red a collision", color.separation("#FF4A47", "#F03A34") < color.COLLIDE)
+check("…and red on blue not one, which luminance alone gets wrong",
+      color.separation("#FF4A47", "#2A66C8") >= color.COLLIDE
+      and abs(color.luminance("#FF4A47") - color.luminance("#2A66C8")) < 0.1)
+check("distinct leaves a colour alone when nothing collides",
+      color.distinct("#FF4A47", "#2A66C8") == "#FF4A47")
+check("…and with nothing to avoid at all", color.distinct("#FF4A47") == "#FF4A47")
+check("distinct lightens first — the dark side is usually the occupied one",
+      color.distinct("#FF4A47", "#F03A34") == color.mix("#FF4A47", "#FFFFFF", 0.5))
+check("…but goes dark when the light candidate is taken too",
+      color.distinct("#FF4A47", "#F03A34", "#FFA4A3")
+      == color.mix("#FF4A47", "#000000", 0.5))
+check("…and keeps the hue either way: a nudged red is still red",
+      all(color.parse(c)[0] > color.parse(c)[2]
+          for c in (color.distinct("#FF4A47", "#F03A34"),
+                    color.distinct("#FF4A47", "#F03A34", "#FFA4A3"))))
+check("distinct returns the best it can when nothing clears — never raises",
+      color.distinct("#808080", "#808080", "#C0C0C0", "#404040") is not None)
+
 # render() must never raise — Surface's fault isolation turns a raise into an
 # ERR tile, so a malformed colour would silently eat a session's key.
 check("a malformed colour passes through instead of raising",
@@ -354,8 +376,12 @@ _on = render(DECK, SessionTile(_s, "peregrine", "index rebuild",
 _off = render(DECK, SessionTile(_s, "peregrine", "index rebuild",
                                 lambda *_: None, focused=False).render())
 check("focus changes the tile at all", _on.tobytes() != _off.tobytes())
-check("…but moves NO type: the whole text area is pixel-identical",
-      _on.crop((0, 0, 96, 70)).tobytes() == _off.crop((0, 0, 96, 70)).tobytes())
+# The crop stops at the top of the context meter, which is as far up the tile as
+# focus mass now reaches. Everything above it — both lines of type AND the meter
+# — has to be untouched: the unfocused tile reserves the band's space precisely
+# so the gauge doesn't jump 28 px every time you move between sessions.
+check("…but moves NO type and no meter: everything above the band is identical",
+      _on.crop((0, 0, 96, 62)).tobytes() == _off.crop((0, 0, 96, 62)).tobytes())
 check("…and the change is all at the bottom edge",
       _on.crop((0, 80, 96, 96)).tobytes() != _off.crop((0, 80, 96, 96)).tobytes())
 
@@ -363,6 +389,52 @@ check("a foot stacks above the meter rather than overdrawing it",
       render(DECK, Slot(label="x", bg="#245BAE", bar=1.0, bar_color="#FFFFFF",
                         foot="#FF0000", foot_h=10)).getpixel((48, 90))
       == (255, 0, 0))
+check("…and an empty foot reserves that space without drawing anything",
+      render(DECK, Slot(label="x", bg="#245BAE", bar=1.0, bar_color="#FFFFFF",
+                        foot="", foot_h=10)).getpixel((48, 90))
+      == render(DECK, Slot(label="x", bg="#245BAE")).getpixel((48, 90)))
+
+# Reverse-rounded shoulders: the band flares UP the edges, so at the extreme
+# left there is white ABOVE the band's nominal top, and at mid-key there is not.
+_sh = render(DECK, Slot(label="x", bg="#245BAE", foot="#FFFFFF", foot_h=20,
+                        foot_r=8))
+_lit = lambda x, y: _sh.getpixel((x, y))[0] > 200          # band top is y=76
+check("the foot's corners round the WRONG way — white ABOVE the band at the edges",
+      _lit(0, 73) and _lit(95, 73),
+      f"{_sh.getpixel((0, 73))} / {_sh.getpixel((95, 73))}")
+check("…and nothing above it mid-key, so the flare is a corner and not a rule",
+      not _lit(48, 73) and not _lit(48, 69))
+check("…concave: the shoulder widens as it approaches the band",
+      sum(_lit(x, 75) for x in range(20)) > sum(_lit(x, 72) for x in range(20)))
+check("…and both shoulders are identical, not two independently drawn arcs",
+      _sh.crop((0, 68, 8, 76)).transpose(Image.FLIP_LEFT_RIGHT).tobytes()
+      == _sh.crop((88, 68, 96, 76)).tobytes())
+
+print("\n[meters] the context ramp: quiet, then caution, then warning")
+check("below 50% the gauge is furniture, in the caller's own quiet colour",
+      palette.context_color(0) == palette.METER
+      and palette.context_color(49.9) == palette.METER)
+check("50-75% is caution", palette.context_color(50) == palette.CAUTION
+      and palette.context_color(74.9) == palette.CAUTION)
+check("75% and up is warning", palette.context_color(75) == palette.WARNING
+      and palette.context_color(100) == palette.WARNING)
+# The board floods a tile with its state colour, so the ramp has to survive
+# being drawn on its own hue — a red meter on a red tile is no meter at all. It
+# also has to survive being drawn beside the SAME gauge below the threshold: a
+# meter that goes to caution and doesn't visibly change has not warned anyone.
+_dist = lambda a, b: sum((p - q) ** 2 for p, q
+                         in zip(color.parse(a), color.parse(b))) ** 0.5
+for _state in ("blocked", "waiting", "working", "idle"):
+    _st = palette.STATE[_state]
+    _quiet = color.over(_st.ink, 0.55, _st.field)      # what the tile draws < 50%
+    for _pct in (60.0, 90.0):
+        _c = palette.context_color(_pct, base=_quiet, field=_st.field)
+        check(f"the {_pct:.0f}% meter is visible on a {_state} tile",
+              _dist(_c, _st.field) >= 90,
+              f"{_c} on {_st.field}, distance {_dist(_c, _st.field):.0f}")
+        check(f"…and differs from the same tile's sub-50% gauge",
+              _dist(_c, _quiet) >= 90,
+              f"{_c} vs {_quiet}, distance {_dist(_c, _quiet):.0f}")
 
 print("\n[info bar] the tally must not collide with the headline")
 for name, args in {

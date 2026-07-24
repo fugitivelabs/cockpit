@@ -56,6 +56,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from deck.color import distinct
+
 # --- the five meanings -----------------------------------------------------
 
 WARNING = "#FF4A47"      # red    — stopped, needs you now
@@ -104,7 +106,15 @@ FOCUS = "#FFFFFF"
 # No frame either, for the same reason: an inset perimeter shifts the text
 # horizontally by its own width. Focus must be addable and removable without
 # anything else on the tile twitching.
-FOCUS_FOOT_H = 15
+FOCUS_FOOT_H = 20
+# The band's top corners are rounded the WRONG way — concave fillets that flare
+# the white up the left and right edges instead of shaving it off them. Two
+# reasons, both about the 96 px key. A normal radius removes mass exactly where
+# a bottom band has least of it, at the ends, and mass is the whole argument for
+# the band. And a straight full-width edge reads as a second horizon on a tile
+# that already has a meter above it — the flare makes the white look like it
+# belongs to this tile rather than sitting on top of it.
+FOCUS_FOOT_R = 8
 
 
 @dataclass(frozen=True)
@@ -189,25 +199,52 @@ ANSWER_FRAME_W = 7
 # --- meters ----------------------------------------------------------------
 #
 # A meter is not a status, so it gets its own ramp rather than reusing a state
-# hue. It turns amber at the threshold because "approaching a limit" is exactly
-# what caution means, which is the one cross-cutting reuse this palette allows.
+# hue. It turns amber then red because "approaching a limit" is exactly what
+# caution means and "out of room" is exactly what warning means — the one
+# cross-cutting reuse this palette allows.
 
 METER = "#2F5D7C"
-METER_WARN = CAUTION
 METER_TRACK = "#1A1D21"
-CONTEXT_WARN_PCT = 80.0
 
+# Three bands, not two, and both thresholds sit lower than the single 80% one
+# they replace. A context window is not a fuel gauge you watch drain to empty:
+# half full is already the moment worth knowing about, because that is when the
+# decision — compact now, or start fresh — is still cheap to act on. By the time
+# a session is at 80% the choice has largely been made for you.
+#
+#     < 50%   cool     plenty of room; the gauge is furniture
+#   50-75%    amber    caution — think about where this session ends
+#     >= 75%  red      warning — running out
+CONTEXT_CAUTION_PCT = 50.0
+CONTEXT_WARN_PCT = 75.0
 
-def meter_color(fraction: float, warn: float = 0.8) -> str:
-    return METER_WARN if fraction >= warn else METER
+def context_color(pct: float, base: str = METER, field: str = QUIET) -> str:
+    """Ramp colour for a context-window gauge at `pct` (0..100).
+
+    `base` is the colour below the first threshold — the caller's own idea of a
+    quiet gauge. `field` is what the meter is drawn on. Both are passed, and
+    both are passed to `distinct`, because two things on this board can swallow
+    the ramp and they are the same colour. The FIELD: a tile is flooded with its
+    state hue, so an amber meter on `waiting` and a red one on `blocked` are the
+    colour of the thing behind them. And the gauge's own QUIET colour: that is
+    the tile's ink over its field, which on `blocked` is a pale pink that a
+    lightened red lands squarely on. A meter that reaches its warning colour
+    without visibly changing has warned nobody.
+    """
+    if pct >= CONTEXT_WARN_PCT:
+        return distinct(WARNING, field, base)
+    if pct >= CONTEXT_CAUTION_PCT:
+        return distinct(CAUTION, field, base)
+    return base
 
 
 __all__ = [
     "WARNING", "CAUTION", "GO", "ADVISORY", "INERT",
     "QUIET", "FIELD", "FURNITURE", "INK", "INK_DIM", "INK_OFF",
-    "FOCUS", "FOCUS_FOOT_H",
+    "FOCUS", "FOCUS_FOOT_H", "FOCUS_FOOT_R",
     "StateStyle", "STATE",
     "ANSWER_AFFIRM", "ANSWER_GRANT", "ANSWER_DECLINE", "ANSWER_CANCEL",
     "ANSWER_INK", "ANSWER_INK_DIM", "ANSWER_FRAME_W",
-    "METER", "METER_WARN", "METER_TRACK", "CONTEXT_WARN_PCT", "meter_color",
+    "METER", "METER_TRACK", "CONTEXT_CAUTION_PCT", "CONTEXT_WARN_PCT",
+    "context_color",
 ]

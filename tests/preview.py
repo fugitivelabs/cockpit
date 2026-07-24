@@ -78,7 +78,7 @@ def info_slots():
     return [
         actions._furniture("Opus 4.8", "model", "m"),
         actions._furniture("84%", "context", "c", bar=0.84,
-                           bar_color=palette.meter_color(0.84)),
+                           bar_color=palette.context_color(84.0)),
         actions._furniture("$12.40", "cost", "$"),
         actions._furniture("Firefox", "app", "f"),
     ]
