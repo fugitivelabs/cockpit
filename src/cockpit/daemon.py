@@ -188,6 +188,11 @@ def main(argv=None) -> int:
                          "finds sessions in any terminal and labels them better. "
                          "Both can answer prompts; navigating to a session in a "
                          "non-Terminal.app window is not implemented yet")
+    ap.add_argument("--browser",
+                    default=os.environ.get("COCKPIT_BROWSER", "auto"),
+                    help="which browser the action bar drives when it is "
+                         "frontmost: firefox, chrome, safari, or 'auto' "
+                         "(default) to follow the system default browser")
     ap.add_argument("--heartbeat", action="store_true",
                     help="run the Stage 0.5 heartbeat view instead of the "
                          "dashboard (device-only; no Terminal automation)")
@@ -263,7 +268,8 @@ def main(argv=None) -> int:
                 # Losing the port costs live state, not the board — Stage 1
                 # behaviour is the floor, and the log already said why.
                 listener = None
-        dashboard.set_actions(default_bar(dashboard, surface))
+        dashboard.set_actions(default_bar(dashboard, surface,
+                                          browser=args.browser))
         dashboard.start()
         log.info("dashboard up — %d session(s) on first poll",
                  len(dashboard.sessions))

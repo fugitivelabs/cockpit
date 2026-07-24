@@ -2,9 +2,23 @@
 
 The companion to `axread`, which *reads* a terminal's screen; this *acts* on a
 GUI — raise a window, select a tab. App-agnostic by construction: everything
-takes a pid and asks the Accessibility tree what is there, so nothing here knows
-what Firefox is. Firefox is simply the first caller, and the one that motivated
-it.
+takes a pid and asks the Accessibility tree what is there, so nothing here names
+a browser. Verified 2026-07-23 against **Firefox, Chrome and Safari**, whose tab
+strips are structurally quite different and are all reached by one rule (see
+`_collect_tabs`):
+
+    Firefox   130 tabs, strip at depth 3-4, title in AXTitle,       0.045s
+    Chrome     22 tabs, strip at depth 7-8, title in AXDescription, 0.014s
+    Safari      2 tabs, strip at depth 2-3, no AXTabGroup at all,   0.071s
+
+**Accessibility rather than AppleScript, and the reason is permissions.** Chrome
+and Safari do expose tabs to AppleScript (Firefox does not, and never will —
+see `firefox-tabs.md`), so a per-browser split was the obvious design. But
+driving another app by Apple event needs a *per-application* Automation grant,
+which returned `-1743 Not authorized` for Chrome on this machine and which a
+headless LaunchAgent cannot prompt for. Accessibility needs one grant that
+cockpit already holds for answering prompts, and covers all three browsers with
+one code path. One mechanism, one permission, no per-browser branch.
 
 **Why this exists at all, given `firefox-tabs.md` concluded tabs were out of
 reach.** That research was right about AppleScript — Firefox ships no `.sdef`,
@@ -52,15 +66,33 @@ try:                                    # pragma: no cover - import shape
 except ImportError:                     # pragma: no cover
     HAVE_AX = False
 
-# The tab strip sits shallow in the tree; this bounds the walk so a deeply
-# nested page (an embedded document, a devtools panel) can't turn a key press
-# into a long descent.
-MAX_DEPTH = 8
+# Deep enough to reach Chrome's strip, which sits at depth 7-8 behind four
+# nested AXGroups. Firefox's is at 3-4 and Safari's at 2-3. Bounded so a
+# pathological tree can't turn a key press into a long descent.
+MAX_DEPTH = 14
 
-# Firefox models tabs as radio buttons inside an AXTabGroup — one selected at a
-# time, which is exactly what a radio group means. Other apps may use AXTab;
-# both are accepted so this stays app-agnostic.
+# Tabs present as radio buttons — one selected at a time, which is exactly what
+# a radio group means — or as AXTab. Both accepted so this stays app-agnostic.
 TAB_ROLES = ("AXRadioButton", "AXTab")
+
+# **Never descend into rendered page content.** This is the correctness rule of
+# the whole module, and getting it wrong is silent rather than loud: a web page
+# containing an ARIA tablist exposes `AXTabGroup` with `AXRadioButton` children
+# that are indistinguishable from a browser tab strip by role alone. Chrome's
+# default page has one, and a depth-first search for `AXTabGroup` found *it*
+# instead of the real strip — 22 "tabs" whose titles were page links. The keys
+# would then have pressed links inside the page.
+#
+# The browser's own chrome is always outside the web area, so refusing to enter
+# one is both the fix and the definition: a tab is furniture, not content.
+WEB_ROLES = ("AXWebArea",)
+
+# A tab says so. Role alone is not enough — a radio button is a radio button,
+# and browsers put real ones in their UI — but every browser checked labels the
+# real thing "tab" in AXRoleDescription. Verified 2026-07-23 against Firefox,
+# Chrome and Safari, whose strips are otherwise structurally quite different:
+# Firefox and Chrome nest theirs in an AXTabGroup, Safari does not.
+TAB_ROLE_DESCRIPTION = "tab"
 
 
 @dataclass(frozen=True)
@@ -132,17 +164,41 @@ def _windows(app):
     return _attr(app, "AXWindows") or []
 
 
-def _find(el, roles, depth: int = 0):
-    """First descendant whose role is in `roles`, breadth-agnostic. None if absent."""
+def _is_tab(el) -> bool:
+    """Is this element a browser tab, as opposed to any other radio button?"""
+    if _attr(el, "AXRole") not in TAB_ROLES:
+        return False
+    rd = _attr(el, "AXRoleDescription")
+    return str(rd or "").strip().lower() == TAB_ROLE_DESCRIPTION
+
+
+def _collect_tabs(el, out: list, depth: int = 0) -> None:
+    """Gather the tab elements under `el`, in strip order, skipping page content.
+
+    Deliberately not "find the AXTabGroup and take its children": Safari has no
+    AXTabGroup around its tabs at all, so that rule finds nothing there, while
+    in Chrome it finds a tablist *inside the page* before the real strip. Walking
+    for tabs themselves and refusing to enter a web area handles all three.
+    """
     if el is None or depth > MAX_DEPTH:
-        return None
-    if _attr(el, "AXRole") in roles:
-        return el
+        return
+    if _attr(el, "AXRole") in WEB_ROLES:
+        return
+    if _is_tab(el):
+        out.append(el)
+        return                      # a tab contains no tabs
     for child in (_attr(el, "AXChildren") or []):
-        got = _find(child, roles, depth + 1)
-        if got is not None:
-            return got
-    return None
+        _collect_tabs(child, out, depth + 1)
+
+
+def _tab_title(el) -> str:
+    """A tab's label. Firefox and Safari use AXTitle; Chrome uses AXDescription."""
+    return str(_attr(el, "AXTitle") or _attr(el, "AXDescription") or "")
+
+
+def _tab_selected(el) -> bool:
+    """Is this the active tab? AXValue in Firefox/Chrome, AXSelected elsewhere."""
+    return bool(_attr(el, "AXValue") or _attr(el, "AXSelected"))
 
 
 def _front_window(app):
@@ -161,11 +217,9 @@ def _tab_elements(app):
     win = _front_window(app)
     if win is None:
         return []
-    group = _find(win, ("AXTabGroup",))
-    if group is None:
-        return []
-    return [c for c in (_attr(group, "AXChildren") or [])
-            if _attr(c, "AXRole") in TAB_ROLES]
+    out: list = []
+    _collect_tabs(win, out)
+    return out
 
 
 def windows(pid: int) -> list[Window]:
@@ -188,8 +242,7 @@ def tabs(pid: int) -> list[Tab]:
     if not HAVE_AX:
         return []
     try:
-        return [Tab(index=i, title=str(_attr(t, "AXTitle") or ""),
-                    selected=bool(_attr(t, "AXValue")))
+        return [Tab(index=i, title=_tab_title(t), selected=_tab_selected(t))
                 for i, t in enumerate(_tab_elements(_app(pid)))]
     except Exception:
         log.debug("tab enumeration failed for pid %s", pid, exc_info=True)

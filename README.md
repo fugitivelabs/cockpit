@@ -57,7 +57,7 @@ src/fleet/      the session library — discover the agent sessions running on
                 this machine, fuse their state, go to one. Knows nothing about
                 Stream Decks. Shareable on its own.
 src/cockpit/    the glue — the dashboard, the palette, press routing, the daemon.
-tests/          624 assertions, no hardware required
+tests/          643 assertions, no hardware required
 launchd/        the LaunchAgent and the `cockpit` management CLI
 docs/           architecture, operations, prompts, roadmap
 ```

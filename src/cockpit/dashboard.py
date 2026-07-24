@@ -589,9 +589,17 @@ class Dashboard:
 
         False-on-unknown is deliberate: a missing Automation grant must not
         silently swap the action bar into another app's layout.
+
+        Compared case-insensitively, because macOS is not consistent about the
+        casing of a bundle id — System Events says `com.google.Chrome`, the
+        LaunchServices database says `com.google.chrome`, and a straight `==`
+        matches Firefox (lowercase either way) while silently never matching
+        Chrome.
         """
         front = self.frontmost_app()
-        return front is not None and front.bundle_id == bundle_id
+        if front is None or not front.bundle_id or not bundle_id:
+            return False
+        return front.bundle_id.lower() == bundle_id.lower()
 
     def focused_prompt(self):
         """The live menu in the focused session — the basis for answer keys."""

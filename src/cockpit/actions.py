@@ -21,7 +21,7 @@ from typing import Optional
 from deck import BLANK, Slot, Static
 
 from fleet.macos import axapp
-from fleet.macos.osint import activate, frontmost, keystroke
+from fleet.macos.osint import activate, default_browser, frontmost, keystroke
 
 from . import palette
 from .dashboard import ACTION_KEYS, ActionKey, Dashboard
@@ -366,7 +366,60 @@ def _answer_key(dashboard: Dashboard, digit, label: str, prompt) -> ActionKey:
     return ActionKey(slot, run, name=f"answer:{digit or 'esc'}")
 
 
+# The browsers whose tab strips are verified reachable (see fleet/macos/axapp.py).
+# Bundle ids in their canonical casing, as System Events reports them — but every
+# comparison goes through `same_bundle`, because LaunchServices case-folds and
+# `com.google.Chrome` != `com.google.chrome` on a straight compare.
+BROWSERS = {
+    "org.mozilla.firefox": "Firefox",
+    "com.google.Chrome": "Chrome",
+    "com.apple.Safari": "Safari",
+}
+# Short names for the CLI flag, so nobody types a bundle id.
+BROWSER_ALIASES = {name.lower(): bundle for bundle, name in BROWSERS.items()}
+
 FIREFOX_BUNDLE = "org.mozilla.firefox"
+
+
+def same_bundle(a: Optional[str], b: Optional[str]) -> bool:
+    """Bundle ids compared the only way that is safe: case-insensitively.
+
+    macOS is inconsistent about this and it is invisible until it bites. System
+    Events reports `com.google.Chrome`; the LaunchServices plist stores
+    `com.google.chrome`. Firefox is lowercase in both, so anything tested only
+    against Firefox looks correct and silently never matches Chrome.
+    """
+    return bool(a) and bool(b) and a.lower() == b.lower()
+
+
+def resolve_browser(setting: str = "auto") -> tuple:
+    """(bundle_id, display name) for the browser whose keys we should show.
+
+    `setting` is a short name (`firefox`, `chrome`, `safari`) or `auto`, which
+    follows the system default browser — the answer that is right for whoever
+    is sitting at the machine without them configuring anything twice.
+
+    Falls back to Firefox when the default is unset (macOS records no handler
+    until you change it) or names a browser whose tab strip we have not
+    verified. A fallback rather than an error because this runs at daemon start:
+    an unrecognised default should cost you the browser keys, not the deck.
+    """
+    if setting and setting != "auto":
+        bundle = BROWSER_ALIASES.get(setting.lower())
+        if bundle:
+            return bundle, BROWSERS[bundle]
+        log.warning("unknown browser %r — falling back to Firefox", setting)
+        return FIREFOX_BUNDLE, BROWSERS[FIREFOX_BUNDLE]
+
+    default = default_browser()
+    if default:
+        for bundle, name in BROWSERS.items():
+            if same_bundle(bundle, default):
+                return bundle, name
+        log.info("default browser %s is not one we drive — using Firefox", default)
+    else:
+        log.info("no default browser recorded — using Firefox")
+    return FIREFOX_BUNDLE, BROWSERS[FIREFOX_BUNDLE]
 
 
 def _app_action(bundle_id: str, name: str, act) -> "callable":
@@ -385,7 +438,7 @@ def _app_action(bundle_id: str, name: str, act) -> "callable":
     """
     def run(long: bool) -> None:
         front = frontmost()
-        if front is None or front.bundle_id != bundle_id:
+        if front is None or not same_bundle(front.bundle_id, bundle_id):
             log.info("%s: %s is no longer frontmost — ignored", name, bundle_id)
             return
         if not act(front.pid):
@@ -394,16 +447,18 @@ def _app_action(bundle_id: str, name: str, act) -> "callable":
     return run
 
 
-def browser_keys(dashboard: Dashboard) -> dict:
-    """The action bar while a browser is in front.
+def browser_keys(bundle_id: str = FIREFOX_BUNDLE, name: str = "Firefox") -> dict:
+    """The action bar while the configured browser is in front.
 
-    The three moves Grant actually makes in Firefox, and nothing else. The
+    The three moves Grant actually makes in a browser, and nothing else. The
     session board above is unchanged and still carries every "take me back to a
     session" press, so this row does not spend a slot on one.
 
-    All three go through the Accessibility tree rather than synthesized
-    shortcuts — see `fleet/macos/axapp.py` for why that is both safer and more
-    capable than Cmd-` / Cmd-1 / Cmd-9.
+    Identical for every browser, deliberately — the keys are the same three
+    because the workflow is the same three; only which app they act on changes.
+    All go through the Accessibility tree rather than synthesized shortcuts or
+    Apple events; see `fleet/macos/axapp.py` for why that is safer, more
+    capable, and the only option that needs no new permission.
 
     The fourth key is deliberately blank (Grant's call, 2026-07-23): the first
     three are known-wanted, the fourth is not, and a key invented to fill a hole
@@ -411,21 +466,22 @@ def browser_keys(dashboard: Dashboard) -> dict:
     until use names it.
     """
     keys = list(ACTION_KEYS)
+    tag = name.lower()
     return {
         keys[0]: ActionKey(
-            _furniture("next", "window", "ff:nextwin"),
-            _app_action(FIREFOX_BUNDLE, "next window", axapp.focus_next_window),
-            name="ff-next-window"),
+            _furniture("next", "window", f"{tag}:nextwin"),
+            _app_action(bundle_id, "next window", axapp.focus_next_window),
+            name=f"{tag}-next-window"),
         keys[1]: ActionKey(
-            _furniture("first", "tab", "ff:firsttab"),
-            _app_action(FIREFOX_BUNDLE, "first tab",
+            _furniture("first", "tab", f"{tag}:firsttab"),
+            _app_action(bundle_id, "first tab",
                         lambda pid: axapp.select_tab(pid, "first")),
-            name="ff-first-tab"),
+            name=f"{tag}-first-tab"),
         keys[2]: ActionKey(
-            _furniture("last", "tab", "ff:lasttab"),
-            _app_action(FIREFOX_BUNDLE, "last tab",
+            _furniture("last", "tab", f"{tag}:lasttab"),
+            _app_action(bundle_id, "last tab",
                         lambda pid: axapp.select_tab(pid, "last")),
-            name="ff-last-tab"),
+            name=f"{tag}-last-tab"),
         # Not an ActionKey: an empty slot is not a disabled key. A dimmed
         # ActionKey would still read as "something that could work later",
         # which is precisely the wrong signal for a slot we have not decided
@@ -434,7 +490,8 @@ def browser_keys(dashboard: Dashboard) -> dict:
     }
 
 
-def default_bar(dashboard: Dashboard, surface) -> "callable":
+def default_bar(dashboard: Dashboard, surface,
+                browser: str = "auto") -> "callable":
     """The action bar as a *provider* — it depends on what you're looking at.
 
     Fixed: the far-right key is always Firefox (Grant's call). It is the one
@@ -448,26 +505,28 @@ def default_bar(dashboard: Dashboard, surface) -> "callable":
     until then they show the same info keys, which is honest rather than
     offering a key that cannot fire.
     """
+    bundle, name = resolve_browser(browser)
+    log.info("browser keys: %s (%s)", name, bundle)
     info = session_info(dashboard)
-    firefox = {list(ACTION_KEYS)[3]: jump_to_app("Firefox", FIREFOX_BUNDLE)}
-    browser = browser_keys(dashboard)
+    jump = {list(ACTION_KEYS)[3]: jump_to_app(name, bundle)}
+    keys = browser_keys(bundle, name)
 
     def provider() -> dict:
-        # In Firefox the whole session-shaped bar is meaningless: there is no
-        # focused session, so model/context/cost are three dashes, and the
-        # Firefox key would offer to take you to the app you are already in.
+        # In the browser the whole session-shaped bar is meaningless: there is
+        # no focused session, so model/context/cost are three dashes, and the
+        # jump key would offer to take you to the app you are already in.
         # Swap in the browser row instead. Checked first because it is the one
         # case where none of the keys below can apply — a prompt belongs to a
         # session, and you are not in one.
-        if dashboard.in_app(FIREFOX_BUNDLE):
-            return dict(browser)
+        if dashboard.in_app(bundle):
+            return dict(keys)
         # Answer keys win when a menu is genuinely on screen; otherwise the
         # info keys. Note the fallback is info, never a disabled accept/reject —
         # a key that looks like it answers a prompt when none is showing is the
         # failure mode this whole design exists to prevent.
         bar = dict(answer_keys(dashboard) or info)
-        # Firefox only if the menu didn't claim its slot.
-        for slot, key in firefox.items():
+        # The browser jump key only if the menu didn't claim its slot.
+        for slot, key in jump.items():
             bar.setdefault(slot, key)
         return bar
 

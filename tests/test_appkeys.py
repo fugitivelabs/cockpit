@@ -76,9 +76,57 @@ check("last is count-1", tab_target(129, "last") == 128,
       "the real strip observed live")
 
 
+print("\n[same_bundle] macOS is not consistent about bundle-id casing")
+
+check("System Events casing vs LaunchServices casing must match",
+      A.same_bundle("com.google.Chrome", "com.google.chrome"),
+      "the exact pair macOS actually produces")
+check("Safari likewise", A.same_bundle("com.apple.Safari", "com.apple.safari"))
+check("Firefox is lowercase either way — which is why this hid",
+      A.same_bundle("org.mozilla.firefox", "org.mozilla.firefox"))
+check("different apps still differ",
+      not A.same_bundle("com.google.Chrome", "org.mozilla.firefox"))
+check("None is never a match", not A.same_bundle(None, "com.google.Chrome"))
+check("empty is never a match", not A.same_bundle("", ""))
+
+
+print("\n[resolve_browser] explicit setting, else the system default")
+
+import fleet.macos.osint as osint_mod                                # noqa: E402
+
+_real_default = A.default_browser
+try:
+    A.default_browser = lambda: "com.google.chrome"     # as LaunchServices stores it
+    check("auto follows the system default",
+          A.resolve_browser("auto") == ("com.google.Chrome", "Chrome"),
+          "and returns the CANONICAL casing, not the plist's")
+
+    check("an explicit setting overrides the default",
+          A.resolve_browser("firefox") == ("org.mozilla.firefox", "Firefox"))
+    check("…case-insensitively", A.resolve_browser("CHROME")[1] == "Chrome")
+    check("safari resolves too",
+          A.resolve_browser("safari") == ("com.apple.Safari", "Safari"))
+
+    A.default_browser = lambda: None
+    check("no recorded default falls back to Firefox",
+          A.resolve_browser("auto")[1] == "Firefox",
+          "macOS records no handler until you change it")
+
+    A.default_browser = lambda: "com.operasoftware.opera"
+    check("an unrecognised default falls back rather than breaking",
+          A.resolve_browser("auto")[1] == "Firefox")
+
+    A.default_browser = lambda: "com.google.chrome"
+    check("an unknown explicit name falls back too",
+          A.resolve_browser("netscape")[1] == "Firefox",
+          "a bad flag costs the browser keys, not the deck")
+finally:
+    A.default_browser = _real_default
+
+
 print("\n[browser_keys] the row shown while a browser is in front")
 
-bar = A.browser_keys(None)
+bar = A.browser_keys()
 keys = list(ACTION_KEYS)
 check("fills all four action slots", sorted(bar) == sorted(keys))
 
@@ -94,6 +142,29 @@ check("the blank slot is not pressable",
       or bar[keys[3]].on_press(False) is False)
 check("the three keys ARE pressable",
       all(bar[k].on_press is not None for k in keys[:3]))
+
+chrome_bar = A.browser_keys("com.google.Chrome", "Chrome")
+check("the keys are identical for another browser",
+      [(chrome_bar[k].render().label, chrome_bar[k].render().sub) for k in keys[:3]]
+      == labels,
+      "same three moves; only the app they act on changes")
+check("…but the action names identify the browser",
+      chrome_bar[keys[0]].name == "chrome-next-window")
+check("…and the slot cache keys differ, so a switch repaints",
+      chrome_bar[keys[0]].render().key != bar[keys[0]].render().key)
+
+
+print("\n[_is_tab] a tab says so — role alone is not enough")
+
+from fleet.macos import axapp                                        # noqa: E402
+
+check("web content is never descended into",
+      "AXWebArea" in axapp.WEB_ROLES,
+      "a page's ARIA tablist is indistinguishable from a tab strip by role")
+check("the depth bound reaches Chrome's strip at 7-8",
+      axapp.MAX_DEPTH >= 8, f"MAX_DEPTH={axapp.MAX_DEPTH}")
+check("a tab is identified by role description",
+      axapp.TAB_ROLE_DESCRIPTION == "tab")
 
 
 print("\n[_app_action] the press-time guard")

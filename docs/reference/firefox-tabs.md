@@ -20,6 +20,15 @@
 > the answer, and the research on signing, manifest paths and mozeidon is still
 > the right starting point.
 >
+> **Chrome and Safari work the same way** (verified 2026-07-23, all three
+> running at once). Both *do* support AppleScript for tabs where Firefox does
+> not — but driving them by Apple event needs a per-application Automation
+> grant, which returned `-1743 Not authorized` for Chrome here and which a
+> headless LaunchAgent cannot prompt for. Accessibility needs one grant cockpit
+> already holds and covers all three with one code path, so there is no
+> per-browser branch. `--browser {firefox,chrome,safari,auto}` selects which;
+> `auto` follows the system default browser.
+>
 > Kept in full because the AppleScript findings remain true and the bridge
 > architecture remains the fallback. Do not restart the mozeidon evaluation for
 > title-and-switch use cases.
