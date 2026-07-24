@@ -26,7 +26,7 @@ subprocess touches hardware — it can't).
 A LaunchDaemon runs in the system context before login, with no GUI session. Our
 session-focus is AppleScript against the user's Terminal windows, which only
 exists inside the logged-in Aqua session. So it MUST be a per-user LaunchAgent
-(`~/Library/LaunchAgents/local.streamdeck.cockpit.plist`), which also puts it
+(`~/Library/LaunchAgents/local.cockpit.daemon.plist`), which also puts it
 where the USB device lives in the session.
 
 Supervision the plist provides:
@@ -34,7 +34,7 @@ Supervision the plist provides:
 - `RunAtLoad` — starts at login
 - `KeepAlive` — restarts on crash; `bootout` stops it and it stays stopped
 - `ThrottleInterval` — no crash-loop hammering (≥10s between spawns)
-- `StandardOutPath` / `StandardErrorPath` → `~/Library/Logs/streamdeck-cockpit.log`
+- `StandardOutPath` / `StandardErrorPath` → `~/Library/Logs/cockpit.log`
 
 Control: `launchctl bootstrap gui/$(id -u) …plist` to load, `bootout` to stop,
 `kickstart -k` to restart.
@@ -47,7 +47,7 @@ interpreter, so a moved repo or a different machine is the same procedure.
 
 ```bash
 brew install hidapi
-cd streamdeck && python3 -m venv .venv
+cd cockpit && python3 -m venv .venv
 ./.venv/bin/pip install -r requirements.txt
 
 ./launchd/cockpit link       # 'cockpit' onto $PATH
@@ -171,7 +171,7 @@ If `cockpit doctor` ever reports it missing, the fix is:
    and then silently doesn't:
    ```bash
    cockpit doctor | head -2        # prints it as "python (TCC identity)"
-   readlink -f streamdeck/.venv/bin/python
+   readlink -f .venv/bin/python
    ```
 2. System Settings → **Privacy & Security** → **Accessibility** → **+**
 3. `Cmd-Shift-G` in the file picker (it won't browse to `/opt` otherwise), paste
@@ -310,13 +310,13 @@ Built 2026-07-21:
   for seconds and the run loop must keep ticking. And the dashboard rebuilds its
   tiles only when a content signature changes, so an idle board costs one tuple
   compare per tick.
-- **The LaunchAgent** — `launchd/local.streamdeck.cockpit.plist.template`
+- **The LaunchAgent** — `launchd/local.cockpit.daemon.plist.template`
   plus `install.sh` (renders the template with this machine's venv/repo paths
   and bootstraps) and `uninstall.sh` (bootout + remove). `KeepAlive` is
   `{SuccessfulExit: false}`: a graceful SIGTERM exit(0) stays stopped after
   `bootout`, a crash or absent-device exit(1) is retried, `ThrottleInterval` 10s.
 - **Heartbeat** — the daemon logs `heartbeat — up Ns` every 15s and touches
-  `~/Library/Logs/streamdeck-cockpit.heartbeat`, so liveness is checkable
+  `~/Library/Logs/cockpit.heartbeat`, so liveness is checkable
   without the device.
 
 Still to come (later stages): the local socket the channels (MCP client, hooks,
@@ -332,7 +332,7 @@ anywhere — the script still lives in and runs from the repo, so edits to it ta
 effect immediately (the symlink is resolved back to the checkout at run time):
 
 ```bash
-cd streamdeck
+cd cockpit
 ./launchd/cockpit link        # -> ~/.local/bin/cockpit; now `cockpit …` works anywhere
 cockpit install               # render plist for this machine, load, start (idempotent)
 cockpit status                # loaded? pid? last exit? heartbeat age?
@@ -364,7 +364,7 @@ exits and launchd retries.
 
 `install.sh` / `uninstall.sh` still exist as thin wrappers over `cockpit` for
 muscle memory. The soak itself: install, then live with it — sleep the Mac, yank
-the cable, force a crash — and read `~/Library/Logs/streamdeck-cockpit.log`.
+the cable, force a crash — and read `~/Library/Logs/cockpit.log`.
 
 ## Recurring checks
 
