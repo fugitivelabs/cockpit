@@ -24,6 +24,7 @@ raising.
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 from dataclasses import dataclass
 from typing import Optional
@@ -128,6 +129,48 @@ def keystroke(keys: str, timeout: float = 5.0) -> bool:
                     keys, r.returncode, r.stderr.strip()[:160])
         return False
     return True
+
+
+# Where LaunchServices records which app handles which scheme. Read directly
+# rather than through the `LSCopyDefaultHandlerForURLScheme` API, which lives in
+# a pyobjc framework (`LaunchServices`) we do not otherwise depend on — this is
+# one plist read with the stdlib and costs us no new requirement.
+_LS_PLIST = os.path.expanduser(
+    "~/Library/Preferences/com.apple.LaunchServices/com.apple.launchservices.secure.plist")
+
+
+def default_browser() -> Optional[str]:
+    """Bundle id of the default browser, lowercased, or None if unknown.
+
+    **Lowercased deliberately, and every comparison against it must be too.**
+    LaunchServices stores handlers case-folded (`com.google.chrome`) while
+    System Events reports the canonical id (`com.google.Chrome`), so the two
+    never match on a straight `==`. Firefox hides this — its id is lowercase
+    either way — so a test written only against Firefox passes and Chrome
+    silently never matches.
+
+    None means "no explicit handler recorded", which is the normal state on a
+    machine where the default was never changed: macOS falls back to Safari
+    without writing an entry. Callers decide what to do with that rather than
+    being handed a guess.
+    """
+    try:
+        import plistlib
+        with open(_LS_PLIST, "rb") as f:
+            data = plistlib.load(f)
+    except (OSError, ValueError, ImportError) as e:
+        log.debug("could not read LaunchServices handlers: %s", e)
+        return None
+    if not isinstance(data, dict):
+        return None
+    for handler in data.get("LSHandlers") or []:
+        if not isinstance(handler, dict):
+            continue
+        if handler.get("LSHandlerURLScheme") in ("https", "http"):
+            role = handler.get("LSHandlerRoleAll") or handler.get("LSHandlerRoleViewer")
+            if role:
+                return str(role).lower()
+    return None
 
 
 def activate(bundle_id: str, timeout: float = 5.0) -> bool:

@@ -1,5 +1,38 @@
 # Firefox tab control
 
+> **Largely superseded, 2026-07-23 — read this box before acting on anything
+> below.** Everything here evaluated **AppleScript**, and its conclusion about
+> AppleScript is correct and still stands. It did not evaluate the
+> **Accessibility API**, which is an unrelated surface and turns out to answer
+> the question directly: Firefox exposes an `AXTabGroup` whose children are the
+> individual tabs, each carrying its title, its selected state, and an `AXPress`
+> action, plus `AXRaise` on windows. Measured on a real 129-tab window,
+> enumerating every tab costs **0.045s** — cheaper than one `frontmost()` call.
+>
+> So enumeration and switching need **no extension, no native messaging host,
+> and no third-party dependency**. Built in [`fleet/macos/axapp.py`](../../src/fleet/macos/axapp.py);
+> the browser action bar in `cockpit/actions.py` consumes it.
+>
+> **What survives:** the one thing Accessibility does *not* expose is a
+> **per-tab URL** (`AXURL` on a tab is `None`); only the active tab's document
+> URL is readable, via the window's `AXWebArea`. If per-tab URLs are ever
+> needed — a "search my tabs" key, say — the native-host bridge below is still
+> the answer, and the research on signing, manifest paths and mozeidon is still
+> the right starting point.
+>
+> **Chrome and Safari work the same way** (verified 2026-07-23, all three
+> running at once). Both *do* support AppleScript for tabs where Firefox does
+> not — but driving them by Apple event needs a per-application Automation
+> grant, which returned `-1743 Not authorized` for Chrome here and which a
+> headless LaunchAgent cannot prompt for. Accessibility needs one grant cockpit
+> already holds and covers all three with one code path, so there is no
+> per-browser branch. `--browser {firefox,chrome,safari,auto}` selects which;
+> `auto` follows the system default browser.
+>
+> Kept in full because the AppleScript findings remain true and the bridge
+> architecture remains the fallback. Do not restart the mozeidon evaluation for
+> title-and-switch use cases.
+
 Researched 2026-07-19, against Firefox **150.0.2** as installed here.
 
 The problem: a Stream Deck plugin wants to enumerate open Firefox tabs (titles +
@@ -36,7 +69,7 @@ unresolved; a `get-active-url` patch stalled on a mandatory security review arou
 | AppleScript | Dead, permanently (above) |
 | Remote Debugging Protocol (`--start-debugger-server`) | Technically alive, strategically dead. Firefox 129 stopped enabling CDP by default; Selenium removed Firefox CDP in 4.29.0 (2025). Mozilla's own devtools-mcp uses BiDi, not RDP. Building here is building on a deprecation path. |
 | WebDriver BiDi / Marionette | **Can** attach to a running user profile — `geckodriver --connect-existing --marionette-port 2828`, real cookies and tabs intact. But it requires permanently running your daily browser in automation mode: `navigator.webdriver = true`, altered fingerprint, trips Cloudflare/Akamai. Mozilla's own docs warn against leaving it on. Viable for debugging, hostile as a product. |
-| macOS Accessibility API | Does not work. Firefox renders its own chrome and exposes no conformant `AXTabGroup`. Would yield titles but never URLs, plus a permission prompt and per-release fragility. |
+| macOS Accessibility API | ~~Does not work. Firefox renders its own chrome and exposes no conformant `AXTabGroup`.~~ **Wrong — corrected 2026-07-23.** Firefox renders its chrome in HTML, which is exactly *why* it exposes a conformant `AXTabGroup`: 130 tabs enumerated with titles and selected state, plus `AXPress` to switch and `AXRaise` on windows. Chrome and Safari too. The rest of the row stands: titles but **never URLs**, and it does need the Accessibility grant — which cockpit already holds for reading prompts, so it costs nothing extra here. This is now the shipped mechanism. |
 | Firefox-specific IPC / command socket | Does not exist. The three sanctioned channels are native messaging, Marionette/BiDi, and legacy RDP. That is the complete list. |
 
 **Native messaging is the only sanctioned path**, and every serious project in this
@@ -127,6 +160,11 @@ should write the manifest itself on first run (it knows its own install path) an
 surface a clear "extension not connected" state on the key.
 
 ## Recommendation
+
+**Superseded for enumeration and switching — see the box at the top.** Those are
+built on the Accessibility API and need none of what follows. The recommendation
+below now applies only if **per-tab URLs** become necessary, which is the single
+capability Accessibility cannot supply.
 
 Evaluate **contributing a Stream Deck consumer to mozeidon** before building
 anything. The hard parts — signed extension, correct macOS manifest path,

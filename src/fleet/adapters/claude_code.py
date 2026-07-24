@@ -190,6 +190,19 @@ class ClaudeCodeAdapter:
         self._front_window: Optional[str] = None
         self._warned_no_focus = False
         self._logged_focus_ok = False
+        # What was frontmost at the last `focused()` call — including when it
+        # was not us. `focused()` answers "which session are you in" and so
+        # throws away the far more general fact it had to read to decide:
+        # *which app* you are in. Keeping it costs nothing (the osascript
+        # already ran) and is the only way a caller can tell "you are in
+        # Firefox" from "you are in Terminal, on a window that is not a
+        # session" — both of which make focused() return None.
+        self._last_focus = None
+
+    @property
+    def last_focus(self):
+        """The `Focus` seen at the last `focused()` call, or None. Poll-fresh."""
+        return self._last_focus
 
     def sessions(self) -> list[Session]:
         """Every Claude Code session Terminal knows about. Never raises.
@@ -302,9 +315,13 @@ class ClaudeCodeAdapter:
         prompt for one; on denial this returns None and the board simply falls
         back to transition-based recency (see attention.py).
         """
+        # Read and record BEFORE the empty-sessions bail: "what app is in front"
+        # is true whether or not we found any sessions, and a caller styling the
+        # action bar still needs it on an empty board.
+        front = frontmost()
+        self._last_focus = front
         if not sessions:
             return None
-        front = frontmost()
         if front is None:
             # Log once, not every poll: a permanent None means the TCC grant is
             # missing, and that is the difference between "recency tracks the

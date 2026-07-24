@@ -333,6 +333,7 @@ class SessionPoller:
         self._lock = threading.Lock()
         self._sessions: list[Session] = []
         self._focused_handle: Optional[str] = None
+        self._frontmost = None
         self._prompt = None
         self._updated_at: Optional[float] = None
         self._stop = threading.Event()
@@ -388,6 +389,13 @@ class SessionPoller:
             getter = getattr(self._adapter, "focused", None)
             if callable(getter):
                 focused = getter(found)
+            # Which *app* is in front, which is strictly more than `focused`
+            # tells us: that returns None both when you are in another app and
+            # when you are in Terminal on a non-session window. Taken from the
+            # adapter's own last read rather than calling frontmost() again —
+            # it is a 0.13s osascript and it already ran this poll. Adapters
+            # that don't expose it simply leave this None.
+            front = getattr(self._adapter, "last_focus", None)
             found = self.tracker.update(found, focused)
             # Read the on-screen menu only for the session you're looking at,
             # and only while it is actually holding something. Reading every
@@ -415,6 +423,7 @@ class SessionPoller:
         with self._lock:
             self._sessions = list(found)
             self._focused_handle = focused
+            self._frontmost = front
             self._prompt = prompt
             self._updated_at = time.monotonic()
         self._last_poll = time.monotonic()
@@ -452,6 +461,16 @@ class SessionPoller:
     def focused_handle(self) -> Optional[str]:
         with self._lock:
             return self._focused_handle
+
+    def frontmost(self):
+        """The app in front as of the last poll, or None if unreadable.
+
+        Distinct from `focused_handle()`, which is None in two very different
+        situations — you are in another app entirely, or you are in Terminal on
+        a window that isn't a session. Only this can tell them apart.
+        """
+        with self._lock:
+            return self._frontmost
 
     def prompt(self):
         """The menu on screen in the focused session, if any."""
@@ -560,6 +579,27 @@ class Dashboard:
             if s.handle == handle:
                 return s
         return None
+
+    def frontmost_app(self):
+        """The `Focus` of whatever app is in front, or None. See poller.frontmost."""
+        return self.poller.frontmost()
+
+    def in_app(self, bundle_id: str) -> bool:
+        """Is that app in front right now? False when focus is unreadable.
+
+        False-on-unknown is deliberate: a missing Automation grant must not
+        silently swap the action bar into another app's layout.
+
+        Compared case-insensitively, because macOS is not consistent about the
+        casing of a bundle id — System Events says `com.google.Chrome`, the
+        LaunchServices database says `com.google.chrome`, and a straight `==`
+        matches Firefox (lowercase either way) while silently never matching
+        Chrome.
+        """
+        front = self.frontmost_app()
+        if front is None or not front.bundle_id or not bundle_id:
+            return False
+        return front.bundle_id.lower() == bundle_id.lower()
 
     def focused_prompt(self):
         """The live menu in the focused session — the basis for answer keys."""
