@@ -58,7 +58,7 @@ def jump_to_app(name: str, bundle_id: str, label: Optional[str] = None) -> Actio
     return ActionKey(slot, run, name=f"jump:{name}")
 
 
-def jump_to_top(dashboard: Dashboard, caption: str = "top") -> ActionKey:
+def jump_to_top(dashboard: Dashboard) -> ActionKey:
     """Focus the most urgent session without picking a tile.
 
     The attention-assistant move in one press: you don't read the board, you
@@ -69,18 +69,12 @@ def jump_to_top(dashboard: Dashboard, caption: str = "top") -> ActionKey:
     session, else the lowest window id). When Stage 2's hooks land it becomes
     literally "the one that needs you", with no change here — urgency lives in
     the ordering, not in this key.
-
-    `caption` only changes what the key calls itself. The browser row uses
-    "back", because from inside Firefox the same press means "return to where I
-    was" — the session you left is the most recently active one, so it is the
-    top of the ordering unless something started needing you while you were
-    away, which is the one case where you would rather go there instead.
     """
     def slot() -> Slot:
         top = dashboard.top_session()
         if top is None:
-            return _furniture("—", caption, f"{caption}:none")
-        return _furniture(top.cwd, caption, f"{caption}:{top.id}")
+            return _furniture("—", "top", "top:none")
+        return _furniture(top.cwd, "top", f"top:{top.id}")
 
     def run(long: bool) -> None:
         top = dashboard.top_session()
@@ -88,7 +82,7 @@ def jump_to_top(dashboard: Dashboard, caption: str = "top") -> ActionKey:
             dashboard.focus_now(top)      # already off the loop thread
 
     return ActionKey(slot, run, enabled=lambda: dashboard.top_session() is not None,
-                     name=f"jump:{caption}")
+                     name="top")
 
 
 def refresh(dashboard: Dashboard) -> ActionKey:
@@ -387,6 +381,13 @@ BROWSER_ALIASES = {name.lower(): bundle for bundle, name in BROWSERS.items()}
 
 FIREFOX_BUNDLE = "org.mozilla.firefox"
 
+# Where the sessions live — the other end of the far-right key's toggle. Named
+# here rather than imported from the adapter because this is a *destination for
+# a press*, not a claim about where sessions are discovered; the day a second
+# terminal is supported, the adapter answers that question and this follows it.
+TERMINAL_BUNDLE = "com.apple.Terminal"
+TERMINAL_NAME = "Terminal"
+
 
 def same_bundle(a: Optional[str], b: Optional[str]) -> bool:
     """Bundle ids compared the only way that is safe: case-insensitively.
@@ -454,8 +455,7 @@ def _app_action(bundle_id: str, name: str, act) -> "callable":
     return run
 
 
-def browser_keys(dashboard: Dashboard, bundle_id: str = FIREFOX_BUNDLE,
-                 name: str = "Firefox") -> dict:
+def browser_keys(bundle_id: str = FIREFOX_BUNDLE, name: str = "Firefox") -> dict:
     """The action bar while the configured browser is in front.
 
     Three browser moves and a way back. Identical for every browser,
@@ -465,16 +465,19 @@ def browser_keys(dashboard: Dashboard, bundle_id: str = FIREFOX_BUNDLE,
     `fleet/macos/axapp.py` for why that is safer, more capable, and the only
     option that needs no new permission.
 
-    **The fourth key returns you to a session** (Grant's call, 2026-07-24). It
-    was deliberately blank when the row was built — the first three were
-    known-wanted and a key invented to fill a hole is how a control surface
-    accretes things nobody presses — and use has now named it. The board above
-    already carries every "take me to *that* session" press; this is the one the
-    board cannot make cheap, because coming back from the browser you usually
-    want the session you left rather than a particular tile. `jump_to_top`
-    resolves that: the session you left is the most recently active, so it is
-    the top of the ordering unless something began needing you while you were
-    away — and then you want that one instead.
+    **The fourth key is the same jump key, pointed the other way** (Grant's
+    call, 2026-07-24). It was deliberately blank when the row was built — the
+    first three were known-wanted and a key invented to fill a hole is how a
+    control surface accretes things nobody presses — and use has now named it.
+
+    It says `Terminal / app`, exactly as its counterpart says `Firefox / app`,
+    because it is the same key: the far-right slot is "go to the other place",
+    and the words should not change depending on which side of the toggle you
+    are standing on. It does NOT pick a session. Activating Terminal lands you
+    on the window it last had in front, which is the session you left — and
+    naming a specific session here would put a second, differently-worded
+    navigation model on the one key that is supposed to be invariant. The board
+    above still carries every "take me to *that* session" press.
     """
     keys = list(ACTION_KEYS)
     tag = name.lower()
@@ -493,11 +496,10 @@ def browser_keys(dashboard: Dashboard, bundle_id: str = FIREFOX_BUNDLE,
             _app_action(bundle_id, "last tab",
                         lambda pid: axapp.select_tab(pid, "last")),
             name=f"{tag}-last-tab"),
-        # Same slot the jump key occupies everywhere else on the deck, so the
-        # far-right key is always "go to the other place" — Firefox from a
-        # session, a session from Firefox. Nothing about the bar's shape changes
-        # when you cross between them.
-        keys[3]: jump_to_top(dashboard, caption="back"),
+        # Same slot, same key, same words as on the session side — only the
+        # destination flips. Nothing about the far-right key changes when you
+        # cross between the two, which is the whole point of a toggle.
+        keys[3]: jump_to_app(TERMINAL_NAME, TERMINAL_BUNDLE),
     }
 
 
@@ -521,7 +523,7 @@ def default_bar(dashboard: Dashboard, surface,
     log.info("browser keys: %s (%s)", name, bundle)
     info = session_info(dashboard)
     jump = {list(ACTION_KEYS)[3]: jump_to_app(name, bundle)}
-    keys = browser_keys(dashboard, bundle, name)
+    keys = browser_keys(bundle, name)
 
     def provider() -> dict:
         # In the browser the whole session-shaped bar is meaningless: there is
