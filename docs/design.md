@@ -256,16 +256,25 @@ colour it happens to be.
 **Revised 2026-07-22 after living with it: `blocked` does not move.** A breathing
 red tile is intolerable to sit beside for a working day, and once the field is a
 saturated flood the colour is already doing the attention-getting the pulse was
-there for. Loud and still beats loud and moving. `waiting` still breathes — it is
-the quieter warm state and the one most easily missed.
+there for. Loud and still beats loud and moving.
+
+**Revised again 2026-07-24: neither does `waiting`. Nothing on the board moves.**
+The breathe survived the first pass on the argument that amber is the quieter
+warm state and the one most easily missed. On the hardware it is not missed — a
+flooded amber tile among slate ones is already the loudest thing in peripheral
+vision, which is exactly the finding that stilled `blocked`. What the pulse
+actually bought was a tile that never settles in the corner of your eye all day.
+The flood is the signal; motion was a second copy of it with a running cost.
 
 That makes motion a per-state flag (`StateStyle.breathes` / `.flashes`) rather
 than something `needs_you` implies. The machinery is untouched and re-enabling it
 is a one-word change in the palette. `animating()` reports only genuine movement,
-so a static state does not speed the loop up either — switching it off is a real
-saving, not just a cosmetic one.
+so a static state does not speed the loop up either — with every flag off the run
+loop simply never leaves its slow tick, which is a real saving and not a cosmetic
+one.
 
-Only warm states may move. If everything animates, motion stops meaning anything.
+The rules below still hold and still bind whatever turns motion back on. Only
+warm states may move. If everything animates, motion stops meaning anything.
 
 - **Onset** — a decaying flash on the *transition into* a needs-you state.
   "This just happened."

@@ -10,6 +10,8 @@ oscillates between two windows forever and can never reach a third.
 """
 import os
 import sys
+import time
+from types import SimpleNamespace
 
 sys.path.insert(0, os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
@@ -30,6 +32,16 @@ def check(name, cond, detail=""):
     else:
         fail += 1
         print(f"  FAIL  {name}" + (f" — {detail}" if detail else ""))
+
+
+def _settled(read, tries: int = 200) -> bool:
+    """Wait for a key's action to land. Presses run on their own thread — the
+    run loop must keep painting while an osascript round-trip blocks."""
+    for _ in range(tries):
+        if read():
+            return True
+        time.sleep(0.01)
+    return False
 
 
 print("\n[next_window_index] raise the BACKMOST window, or you oscillate")
@@ -126,7 +138,23 @@ finally:
 
 print("\n[browser_keys] the row shown while a browser is in front")
 
-bar = A.browser_keys()
+class FakeDash:
+    """Only what the browser row asks a dashboard: what to go back to."""
+
+    def __init__(self, top=None):
+        self.top = top
+        self.focused = []
+
+    def top_session(self):
+        return self.top
+
+    def focus_now(self, s):
+        self.focused.append(s.id)
+
+
+_back = SimpleNamespace(id="s1", cwd="peregrine")
+dash = FakeDash(_back)
+bar = A.browser_keys(dash)
 keys = list(ACTION_KEYS)
 check("fills all four action slots", sorted(bar) == sorted(keys))
 
@@ -134,16 +162,21 @@ labels = [(bar[k].render().label, bar[k].render().sub) for k in keys[:3]]
 check("the three keys are the ones asked for",
       labels == [("next", "window"), ("first", "tab"), ("last", "tab")],
       str(labels))
-check("the fourth slot is blank",
-      bar[keys[3]].render().label == "",
-      "an empty slot, not a dimmed key that implies it might work later")
-check("the blank slot is not pressable",
-      not hasattr(bar[keys[3]], "on_press")
-      or bar[keys[3]].on_press(False) is False)
+check("the fourth slot goes back to a session, and names which",
+      (bar[keys[3]].render().label, bar[keys[3]].render().sub)
+      == ("peregrine", "back"),
+      str((bar[keys[3]].render().label, bar[keys[3]].render().sub)))
+check("…and pressing it focuses that session",
+      bar[keys[3]].on_press(False) is True and _settled(lambda: dash.focused)
+      and dash.focused == ["s1"], str(dash.focused))
+check("…while with no sessions at all it dims rather than lying",
+      not A.browser_keys(FakeDash(None))[keys[3]].enabled())
+check("…and shows an em dash",
+      A.browser_keys(FakeDash(None))[keys[3]].render().label == "—")
 check("the three keys ARE pressable",
       all(bar[k].on_press is not None for k in keys[:3]))
 
-chrome_bar = A.browser_keys("com.google.Chrome", "Chrome")
+chrome_bar = A.browser_keys(dash, "com.google.Chrome", "Chrome")
 check("the keys are identical for another browser",
       [(chrome_bar[k].render().label, chrome_bar[k].render().sub) for k in keys[:3]]
       == labels,

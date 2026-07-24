@@ -222,8 +222,13 @@ check("motion is opt-in per state, not implied by needs_you",
 check("…and no cool state ever moves",
       not any(st.breathes or st.flashes for n, st in palette.STATE.items()
               if not st.needs_you))
-check("…but the capability is still wired for the states that use it",
-      palette.STATE["waiting"].breathes)
+# As of 2026-07-24 that is every state: the board is entirely still, and a
+# flooded field is doing all the work the pulse used to.
+check("…nor any warm one — nothing on the board moves",
+      not any(st.breathes or st.flashes for st in palette.STATE.values()))
+check("…but the capability is still wired, one word from coming back",
+      all(hasattr(st, "breathes") and hasattr(st, "flashes")
+          for st in palette.STATE.values()))
 check("every state spells itself out",
       all(st.word for st in palette.STATE.values()))
 check("the error tile shares no hue with the palette",

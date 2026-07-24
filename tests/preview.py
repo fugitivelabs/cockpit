@@ -17,6 +17,7 @@ Writes live.png (the three bar states) and pulse.png (frames of the breathe).
 """
 import os
 import sys
+from dataclasses import replace
 
 from PIL import Image, ImageDraw
 
@@ -63,10 +64,20 @@ BOARD = [
 ]
 
 
-def board_slots(pulse_at=None):
+def board_slots(pulse_at=None, force_motion=False):
+    """The board as the daemon would draw it, optionally at one breathe frame.
+
+    `force_motion` flips the breathe flag on for every warm state before asking.
+    Every state currently has motion switched off, so without it the pulse sheet
+    is three identical panels — which would read as "the breathe is broken"
+    rather than "the breathe is off". The sheet's job is to show what turning it
+    back on would look like, and it says so in its own caption.
+    """
     out = []
     for s, focused in BOARD:
         t = SessionTile(s, s.cwd, s.task, lambda *_: None, focused=focused)
+        if force_motion and t.style.needs_you:
+            t.style = replace(t.style, breathes=True)
         slot = t.render()
         if pulse_at is not None and t.animating():
             slot = Slot(**{**slot.__dict__, "pulse": pulse_at})
@@ -160,8 +171,8 @@ if __name__ == "__main__":
     ], os.path.join(out, "live.png"))
 
     stack([
-        panel(board_slots(pulse_at=p) + info_slots(),
+        panel(board_slots(pulse_at=p, force_motion=True) + info_slots(),
               ASKING, f"BREATHE — pulse {p:.2f}",
-              "warm tiles only; cool tiles are identical across frames")
+              "OFF on the live board since 2026-07-24 — forced here to show the frames")
         for p in (0.62, 1.0, 1.8)
     ], os.path.join(out, "pulse.png"))

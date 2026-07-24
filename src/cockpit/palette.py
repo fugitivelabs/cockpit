@@ -147,11 +147,18 @@ STATE = {
                           breathes=False, flashes=False),
     # Amber is light, so this one flips to dark ink — which also makes it read
     # as a caution sign rather than a second alarm.
-    # Amber still breathes: it is the quieter of the two warm states, and a
-    # session that wants you without blocking is the one most easily missed.
+    # Motionless too, as of 2026-07-24 (Grant). The argument that kept the
+    # breathe here was that amber is the quieter warm state and the one most
+    # easily missed — but on the hardware it is not missed, because a flooded
+    # amber tile among slate ones is already the loudest thing in peripheral
+    # vision. What the pulse actually bought was a tile that never settles, in
+    # the corner of your eye, all day. **Nothing on the board moves now.** The
+    # per-state flags stay: the machinery is a one-word change away if a state
+    # ever earns motion back, and `animating()` reporting False everywhere means
+    # the run loop never leaves its slow tick.
     "waiting": StateStyle(CAUTION, "#F5AC1A", "#150F02", "#4A3506",
                           "WAITING", "?", True,
-                          breathes=True, flashes=True),
+                          breathes=False, flashes=False),
     # Present but calm: unmistakably blue at a glance, without competing with
     # the warm pair for attention. A working session needs nothing from you.
     "working": StateStyle(ADVISORY, "#2A66C8", "#FFFFFF", "#D6E6FF",

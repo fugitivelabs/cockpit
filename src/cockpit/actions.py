@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from deck import BLANK, Slot, Static
+from deck import Slot
 
 from fleet.macos import axapp
 from fleet.macos.osint import activate, default_browser, frontmost, keystroke
@@ -58,7 +58,7 @@ def jump_to_app(name: str, bundle_id: str, label: Optional[str] = None) -> Actio
     return ActionKey(slot, run, name=f"jump:{name}")
 
 
-def jump_to_top(dashboard: Dashboard) -> ActionKey:
+def jump_to_top(dashboard: Dashboard, caption: str = "top") -> ActionKey:
     """Focus the most urgent session without picking a tile.
 
     The attention-assistant move in one press: you don't read the board, you
@@ -69,12 +69,18 @@ def jump_to_top(dashboard: Dashboard) -> ActionKey:
     session, else the lowest window id). When Stage 2's hooks land it becomes
     literally "the one that needs you", with no change here — urgency lives in
     the ordering, not in this key.
+
+    `caption` only changes what the key calls itself. The browser row uses
+    "back", because from inside Firefox the same press means "return to where I
+    was" — the session you left is the most recently active one, so it is the
+    top of the ordering unless something started needing you while you were
+    away, which is the one case where you would rather go there instead.
     """
     def slot() -> Slot:
         top = dashboard.top_session()
         if top is None:
-            return _furniture("—", "top", "top:none")
-        return _furniture(top.cwd, "top", f"top:{top.id}")
+            return _furniture("—", caption, f"{caption}:none")
+        return _furniture(top.cwd, caption, f"{caption}:{top.id}")
 
     def run(long: bool) -> None:
         top = dashboard.top_session()
@@ -82,7 +88,7 @@ def jump_to_top(dashboard: Dashboard) -> ActionKey:
             dashboard.focus_now(top)      # already off the loop thread
 
     return ActionKey(slot, run, enabled=lambda: dashboard.top_session() is not None,
-                     name="top")
+                     name=f"jump:{caption}")
 
 
 def refresh(dashboard: Dashboard) -> ActionKey:
@@ -448,23 +454,27 @@ def _app_action(bundle_id: str, name: str, act) -> "callable":
     return run
 
 
-def browser_keys(bundle_id: str = FIREFOX_BUNDLE, name: str = "Firefox") -> dict:
+def browser_keys(dashboard: Dashboard, bundle_id: str = FIREFOX_BUNDLE,
+                 name: str = "Firefox") -> dict:
     """The action bar while the configured browser is in front.
 
-    The three moves Grant actually makes in a browser, and nothing else. The
-    session board above is unchanged and still carries every "take me back to a
-    session" press, so this row does not spend a slot on one.
+    Three browser moves and a way back. Identical for every browser,
+    deliberately — the keys are the same three because the workflow is the same
+    three; only which app they act on changes. All go through the Accessibility
+    tree rather than synthesized shortcuts or Apple events; see
+    `fleet/macos/axapp.py` for why that is safer, more capable, and the only
+    option that needs no new permission.
 
-    Identical for every browser, deliberately — the keys are the same three
-    because the workflow is the same three; only which app they act on changes.
-    All go through the Accessibility tree rather than synthesized shortcuts or
-    Apple events; see `fleet/macos/axapp.py` for why that is safer, more
-    capable, and the only option that needs no new permission.
-
-    The fourth key is deliberately blank (Grant's call, 2026-07-23): the first
-    three are known-wanted, the fourth is not, and a key invented to fill a hole
-    is how a control surface accretes things nobody presses. It stays empty
-    until use names it.
+    **The fourth key returns you to a session** (Grant's call, 2026-07-24). It
+    was deliberately blank when the row was built — the first three were
+    known-wanted and a key invented to fill a hole is how a control surface
+    accretes things nobody presses — and use has now named it. The board above
+    already carries every "take me to *that* session" press; this is the one the
+    board cannot make cheap, because coming back from the browser you usually
+    want the session you left rather than a particular tile. `jump_to_top`
+    resolves that: the session you left is the most recently active, so it is
+    the top of the ordering unless something began needing you while you were
+    away — and then you want that one instead.
     """
     keys = list(ACTION_KEYS)
     tag = name.lower()
@@ -483,11 +493,11 @@ def browser_keys(bundle_id: str = FIREFOX_BUNDLE, name: str = "Firefox") -> dict
             _app_action(bundle_id, "last tab",
                         lambda pid: axapp.select_tab(pid, "last")),
             name=f"{tag}-last-tab"),
-        # Not an ActionKey: an empty slot is not a disabled key. A dimmed
-        # ActionKey would still read as "something that could work later",
-        # which is precisely the wrong signal for a slot we have not decided
-        # about yet.
-        keys[3]: Static(BLANK),
+        # Same slot the jump key occupies everywhere else on the deck, so the
+        # far-right key is always "go to the other place" — Firefox from a
+        # session, a session from Firefox. Nothing about the bar's shape changes
+        # when you cross between them.
+        keys[3]: jump_to_top(dashboard, caption="back"),
     }
 
 
@@ -495,9 +505,10 @@ def default_bar(dashboard: Dashboard, surface,
                 browser: str = "auto") -> "callable":
     """The action bar as a *provider* — it depends on what you're looking at.
 
-    Fixed: the far-right key is always Firefox (Grant's call). It is the one
-    action that never depends on session state, so it earns the one slot that
-    never changes under your finger.
+    Fixed: the far-right key is always the jump (Grant's call). From a session
+    it offers Firefox; from Firefox it offers the session you left. It is the
+    one action that never depends on session state, so it earns the one slot
+    that never changes under your finger — and now it points both ways.
 
     The other three follow the focused session. Today only the idle/working
     case is built — model, context, cost. A session holding a permission prompt
@@ -510,7 +521,7 @@ def default_bar(dashboard: Dashboard, surface,
     log.info("browser keys: %s (%s)", name, bundle)
     info = session_info(dashboard)
     jump = {list(ACTION_KEYS)[3]: jump_to_app(name, bundle)}
-    keys = browser_keys(bundle, name)
+    keys = browser_keys(dashboard, bundle, name)
 
     def provider() -> dict:
         # In the browser the whole session-shaped bar is meaningless: there is

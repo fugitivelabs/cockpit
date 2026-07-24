@@ -343,22 +343,32 @@ check("…and is the warm one, where working is cool",
 check("…and carries a badge rather than spending the caption on its state",
       blocked_slot.badge == "!" and blocked_slot.sub == "y",
       f"badge={blocked_slot.badge!r} sub={blocked_slot.sub!r}")
-# Motion is opt-in per state, NOT implied by needs-you. blocked is the loudest
-# thing on the deck and deliberately does not move (Grant, on living with it);
-# waiting is the quieter warm state and still breathes.
+# Motion is opt-in per state, NOT implied by needs-you — and as of 2026-07-24
+# every state has it switched off. blocked went still first (a breathing red
+# tile is intolerable to sit beside); waiting followed, on the same finding, once
+# it was clear a flooded amber tile is not missed without one.
 _blocked = SessionTile(mk("claude:2", "x", "y", "blocked"), "x", "y", focused.append)
 check("blocked does NOT animate — loud and still beats loud and moving",
       _blocked.animating() is False)
 check("…so its field sits at full brightness", _blocked.render().pulse == 1.0)
 _waiting = SessionTile(mk("claude:3", "x", "y", "waiting"), "x", "y", focused.append)
-check("waiting still breathes", _waiting.animating() is True)
+check("waiting does not move either — nothing on the board does now",
+      _waiting.animating() is False)
+check("…so it too sits at full brightness", _waiting.render().pulse == 1.0)
+# The machinery is still proven, with every state switched off, by flipping one
+# on by hand. "Re-enabling is one word in the palette" has to be a fact rather
+# than a hope — an untested capability is one nobody can switch back on.
+_moving = SessionTile(mk("claude:4", "x", "y", "waiting"), "x", "y", focused.append)
+_moving.style = replace(_moving.style, breathes=True)
+check("a state with the flag on breathes — the capability is intact",
+      _moving.animating() is True)
 # Sampled over time, not once: a breathe legitimately passes through 1.0 at the
 # top of its cycle, so a single render can catch it at full brightness. The
 # property that matters is that the value MOVES.
 _seen = set()
 _t0 = time.monotonic()
 while time.monotonic() - _t0 < 1.2:
-    _seen.add(_waiting.render().pulse)
+    _seen.add(_moving.render().pulse)
     time.sleep(0.01)
 check("…which shows up as a field brightness that varies over time",
       len(_seen) > 1, f"{len(_seen)} distinct in 1.2s")
@@ -368,8 +378,8 @@ _tol = 1.0 / (STEPS - 1)
 check("…within the configured floor and ceiling",
       all(BREATHE_LO - _tol <= v <= 1.0 + 1e-9 for v in _seen),
       f"{min(_seen):.3f}..{max(_seen):.3f} (floor {BREATHE_LO})")
-check("the pulse capability is intact, just switched off for blocked",
-      palette.STATE["waiting"].breathes and not palette.STATE["blocked"].breathes)
+check("…and the board itself has every flag off",
+      not any(st.breathes or st.flashes for st in palette.STATE.values()))
 check("cool states never move",
       not any(palette.STATE[n].breathes or palette.STATE[n].flashes
               for n in ("working", "idle")))
